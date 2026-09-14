@@ -1,130 +1,178 @@
+import type { Message } from "@ag-ui/core";
+export type Citation = {
+  id?: string;
+  document_id: string;
+  document_name: string;
+  page: number;
+  text?: string;
+};
+export type WebSource = { id?: string; title: string; url: string };
 export type Turn = {
   id: string;
+  messageId?: string;
   question: string;
   documentName: string;
   status: "pending" | "complete" | "error" | "stopped";
-  ragAnswer?: string;
-  mcpAnswer?: string;
+  answer?: string;
+  phase?: string;
+  citations?: Citation[];
+  webSources?: WebSource[];
   error?: string;
-};
-
-export type DocumentInfo = {
-  id: string;
-  name: string;
-  size: number;
-  lastModified: number;
 };
 export type Conversation = {
   id: string;
   title: string;
-  document: DocumentInfo | null;
+  documentIds: string[];
   turns: Turn[];
 };
-export const STORAGE_KEY = "document-ai:conversations:v1";
-export const EMPTY_CONVERSATION: Conversation = {
-  id: "welcome",
-  title: "New conversation",
-  document: null,
-  turns: [],
-};
-
-export function createConversation(
-  document: DocumentInfo | null = null,
-): Conversation {
+export const STORAGE_KEY = "document-ai:conversations:v2";
+export function createConversation(documentIds: string[] = []): Conversation {
   return {
     id: crypto.randomUUID(),
     title: "New conversation",
-    document,
+    documentIds,
     turns: [],
   };
 }
-
 export function formatSize(bytes: number): string {
   return bytes < 1024 * 1024
     ? `${Math.max(1, Math.round(bytes / 1024))} KB`
     : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
-
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-// Browser storage may be stale or edited. Only restore the fields this UI understands.
+export function citationsFromState(value: unknown): Citation[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (item): item is Citation =>
+        isRecord(item) &&
+        typeof item.document_id === "string" &&
+        typeof item.document_name === "string" &&
+        typeof item.page === "number",
+    )
+    .slice(0, 20)
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : undefined,
+      document_id: item.document_id,
+      document_name: item.document_name,
+      page: item.page,
+    }));
+}
+export function webSourcesFromState(value: unknown): WebSource[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (item): item is WebSource =>
+        isRecord(item) &&
+        typeof item.title === "string" &&
+        typeof item.url === "string" &&
+        /^https?:\/\//i.test(item.url),
+    )
+    .slice(0, 10)
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : undefined,
+      title: item.title,
+      url: item.url,
+    }));
+}
+// Restore only this account's understood display fields. Never restore tool results or reasoning.
 export function restoreConversations(raw: string | null): Conversation[] {
   try {
     const data: unknown = JSON.parse(raw ?? "null");
     if (!Array.isArray(data)) return [];
     return data
+      .filter(isRecord)
+      .filter(
+        (item) =>
+          typeof item.id === "string" &&
+          typeof item.title === "string" &&
+          Array.isArray(item.documentIds) &&
+          item.documentIds.every((id) => typeof id === "string") &&
+          Array.isArray(item.turns),
+      )
       .slice(0, 30)
-      .filter((item) => {
-        if (
-          !isRecord(item) ||
-          typeof item.id !== "string" ||
-          typeof item.title !== "string" ||
-          !Array.isArray(item.turns)
-        )
-          return false;
-        const doc = item.document;
-        return (
-          doc === null ||
-          (isRecord(doc) &&
-            typeof doc.id === "string" &&
-            typeof doc.name === "string" &&
-            typeof doc.size === "number" &&
-            typeof doc.lastModified === "number")
-        );
-      })
       .map((item) => ({
-        id: item.id,
-        title: item.title,
-        document: item.document,
-        turns: item.turns
+        id: item.id as string,
+        title: item.title as string,
+        documentIds: item.documentIds as string[],
+        turns: (item.turns as unknown[])
+          .filter(isRecord)
           .filter(
-            (turn: unknown) =>
-              isRecord(turn) &&
+            (turn) =>
               typeof turn.id === "string" &&
               typeof turn.question === "string" &&
               typeof turn.documentName === "string" &&
               ["pending", "complete", "error", "stopped"].includes(
                 String(turn.status),
-              ) &&
-              (turn.ragAnswer === undefined ||
-                typeof turn.ragAnswer === "string") &&
-              (turn.mcpAnswer === undefined ||
-                typeof turn.mcpAnswer === "string") &&
-              (turn.error === undefined || typeof turn.error === "string"),
+              ),
           )
-          .map((turn: Turn) => ({
-            id: turn.id,
-            question: turn.question,
-            documentName: turn.documentName,
-            status: turn.status === "pending" ? "stopped" : turn.status,
-            ragAnswer: turn.ragAnswer,
-            mcpAnswer: turn.mcpAnswer,
-            error: turn.error,
+          .map((turn) => ({
+            id: turn.id as string,
+            messageId:
+              typeof turn.messageId === "string" ? turn.messageId : undefined,
+            question: turn.question as string,
+            documentName: turn.documentName as string,
+            status:
+              turn.status === "pending"
+                ? "stopped"
+                : (turn.status as Turn["status"]),
+            answer: typeof turn.answer === "string" ? turn.answer : undefined,
+            error: typeof turn.error === "string" ? turn.error : undefined,
+            citations: citationsFromState(turn.citations),
+            webSources: webSourcesFromState(turn.webSources),
           })),
       }));
   } catch {
     return [];
   }
 }
-
+export function conversationMessages(
+  conversation: Conversation,
+  beforeTurnId?: string,
+): Message[] {
+  const messages: Message[] = [];
+  for (const turn of conversation.turns) {
+    if (turn.id === beforeTurnId) break;
+    if (turn.status !== "complete" || !turn.answer) continue;
+    messages.push(
+      { id: turn.messageId ?? turn.id, role: "user", content: turn.question },
+      { id: `${turn.id}:answer`, role: "assistant", content: turn.answer },
+    );
+  }
+  return messages;
+}
 export function conversationMarkdown(conversation: Conversation): string {
   return [
     `# ${conversation.title}`,
-    conversation.document ? `Document: ${conversation.document.name}` : "",
     ...conversation.turns.flatMap((turn) => [
       `## ${turn.question}`,
-      ...(turn.status === "complete"
-        ? [
-            "### Document answer",
-            turn.ragAnswer || "No document answer returned.",
-            "### Web answer",
-            turn.mcpAnswer || "No web answer returned.",
-          ]
-        : [`Response ${turn.status}.`, turn.error || ""]),
+      `Documents: ${turn.documentName}`,
+      turn.answer || `Response ${turn.status}.`,
+      turn.error || "",
+      ...(turn.citations ?? []).map(
+        (source) => `- ${source.document_name}, page ${source.page}`,
+      ),
+      ...(turn.webSources ?? []).map(
+        (source) => `- [${source.title}](${source.url})`,
+      ),
     ]),
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+export function phaseLabel(phase?: string): string {
+  const labels: Record<string, string> = {
+    planning: "Preparing your question",
+    retrieving: "Searching your documents",
+    retrieval: "Searching your documents",
+    searching: "Searching the web",
+    web_search: "Searching the web",
+    generating: "Writing your answer",
+    answering: "Writing your answer",
+    retrying: "Retrying the request",
+    complete: "Answer complete",
+  };
+  return labels[phase ?? ""] || "Working on your question";
 }

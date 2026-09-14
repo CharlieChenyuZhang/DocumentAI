@@ -768,3 +768,110 @@ svg {
     transition-duration: 0.01ms !important;
   }
 }
+
+.session-screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+  text-align: center;
+}
+.session-screen h1 {
+  font-size: 28px;
+  font-weight: 500;
+}
+.session-screen p {
+  max-width: 440px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.retrieval-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 3px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.retrieval-controls button,
+.library-link {
+  padding: 6px 0;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+}
+.retrieval-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.retrieval-controls input,
+.document-library input {
+  accent-color: var(--accent);
+}
+.library-link {
+  display: block;
+  margin: 12px auto 0;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.document-library-hint {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.document-library {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px;
+}
+.document-library li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+}
+.document-library label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.document-library input {
+  margin-top: 4px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.document-library strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+.document-library small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+  margin-top: 4px;
+}
+.document-library-error {
+  color: #905332;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.document-dialog-content {
+  overflow-y: auto;
+  padding-bottom: 24px;
+}

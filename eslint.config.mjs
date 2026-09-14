@@ -7,6 +7,8 @@ export default defineConfig([
   globalIgnores([
     ".next/**",
     "server/**",
+    ".venv/**",
+    ".data/**",
     "build/**",
     "coverage/**",
     "playwright-report/**",

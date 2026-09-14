@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
+import { CopilotKit, useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
 import {
   ArrowDownToLine,
-  ArrowUpRight,
   Check,
   CircleHelp,
   FileText,
@@ -15,16 +23,26 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { ApiError, askQuestion, uploadDocument, validatePdf } from "../lib/api";
 import {
+  ApiError,
+  deleteDocument,
+  getSession,
+  listDocuments,
+  uploadDocument,
+  validatePdf,
+  type DocumentInfo,
+  type SessionInfo,
+} from "../lib/api";
+import {
+  citationsFromState,
   conversationMarkdown,
+  conversationMessages,
   createConversation,
-  EMPTY_CONVERSATION,
   formatSize,
   restoreConversations,
   STORAGE_KEY,
+  webSourcesFromState,
   type Conversation,
-  type DocumentInfo,
   type Turn,
 } from "../lib/workspace";
 import { Composer } from "./composer";
@@ -34,124 +52,320 @@ const suggestions = [
   {
     title: "Summarize",
     prompt:
-      "Summarize the key ideas in this document and highlight the most important takeaways.",
+      "Summarize the key ideas across the selected documents and highlight the most important takeaways.",
   },
   {
-    title: "Key findings",
+    title: "Compare findings",
     prompt:
-      "What are the most important findings, facts, and figures in this document?",
+      "Compare the key findings in the selected documents. Where do they agree or differ?",
   },
   {
     title: "Explore context",
     prompt:
-      "Explain the main topic of this document and compare it with relevant information from the web.",
+      "Explain the main topic of these documents and compare it with relevant information from the web.",
   },
 ];
+class AgentBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? (
+      <main className="session-screen">
+        <h1>Document AI is unavailable</h1>
+        <p>
+          The assistant could not connect. Please check the service and try
+          again.
+        </p>
+        <button
+          className="primary-button"
+          onClick={() => window.location.reload()}
+        >
+          Try again
+        </button>
+      </main>
+    ) : (
+      this.props.children
+    );
+  }
+}
 
 export function Workspace() {
-  const [conversations, setConversations] = useState<Conversation[]>([
-    EMPTY_CONVERSATION,
-  ]);
-  const [activeId, setActiveId] = useState(EMPTY_CONVERSATION.id);
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    const refresh = () => {
+      void getSession({ signal: controller.signal })
+        .then((result) => {
+          setSession(result);
+          setError("");
+        })
+        .catch((cause) => {
+          if (!controller.signal.aborted) {
+            setSession(null);
+            setError(
+              cause instanceof Error
+                ? cause.message
+                : "Could not load your session.",
+            );
+          }
+        });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      controller.abort();
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+  if (error)
+    return (
+      <main className="session-screen">
+        <h1>Document AI</h1>
+        <p role="alert">{error}</p>
+        <button
+          className="primary-button"
+          onClick={() => window.location.reload()}
+        >
+          Try again
+        </button>
+      </main>
+    );
+  if (!session)
+    return (
+      <main className="session-screen">
+        <LoaderCircle className="animate-spin" size={22} />
+        <p role="status">Opening your workspace…</p>
+      </main>
+    );
+  if (!session.authenticated || !session.user)
+    return (
+      <main className="session-screen">
+        <FileText size={30} />
+        <h1>Your document workspace</h1>
+        <p>
+          Sign in to upload documents and ask questions about your own library.
+        </p>
+        <form action="/api/auth/signin" method="get">
+          <button className="primary-button" type="submit">
+            Continue with GitHub
+          </button>
+        </form>
+      </main>
+    );
+  return (
+    <AgentBoundary key={session.user.id}>
+      <CopilotKit
+        runtimeUrl="/api/copilotkit"
+        useSingleEndpoint={false}
+        agentId="document_ai"
+        enableInspector={false}
+        showDevConsole={false}
+        credentials="same-origin"
+      >
+        <DocumentWorkspace
+          user={session.user}
+          availableWebSearch={session.configuration?.web_search === true}
+        />
+      </CopilotKit>
+    </AgentBoundary>
+  );
+}
+
+type ActiveRun = {
+  conversationId: string;
+  turnId: string;
+  messageId: string;
+  stopped: boolean;
+  error?: string;
+};
+function DocumentWorkspace({
+  user,
+  availableWebSearch,
+}: {
+  user: NonNullable<SessionInfo["user"]>;
+  availableWebSearch: boolean;
+}) {
+  const { agent, isReady } = useAgent({ agentId: "document_ai" });
+  const { copilotkit } = useCopilotKit();
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [documents, setDocuments] = useState<DocumentInfo[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<"idle" | "uploading" | "answering">(
     "idle",
   );
+  const [webPreference, setWebPreference] = useState(availableWebSearch);
+  const webEnabled = availableWebSearch && webPreference;
   const [notice, setNotice] = useState("");
-  const [uploadError, setUploadError] = useState("");
+  const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [availableFiles, setAvailableFiles] = useState<string[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploadName, setUploadName] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
-  const fileMap = useRef(new Map<string, File>());
   const controller = useRef<AbortController | null>(null);
   const locked = useRef(false);
+  const activeRun = useRef<ActiveRun | null>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const documentDialog = useRef<HTMLDialogElement>(null);
   const helpDialog = useRef<HTMLDialogElement>(null);
   const clearDialog = useRef<HTMLDialogElement>(null);
   const scrollEnd = useRef<HTMLDivElement>(null);
-  const conversation =
-    conversations.find((item) => item.id === activeId) ?? conversations[0];
-  const document = conversation.document;
-  const hasFile = !!document && availableFiles.includes(document.id);
+  const scrollPanel = useRef<HTMLElement>(null);
+  const followAnswer = useRef(true);
+  const storageKey = `${STORAGE_KEY}:${user.id}`;
+  const conversation = conversations.find((item) => item.id === activeId);
+  const selectedDocuments = documents.filter((document) =>
+    conversation?.documentIds.includes(document.id),
+  );
+  const readyDocuments = selectedDocuments.filter(
+    (document) => document.status === "ready",
+  );
   const busy = phase !== "idle";
-  const hasMessages = conversation.turns.length > 0;
+  const hasMessages = Boolean(conversation?.turns.length);
+
+  const updateConversation = useCallback(
+    (id: string, change: (item: Conversation) => Conversation) => {
+      setConversations((items) =>
+        items.map((item) => (item.id === id ? change(item) : item)),
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
     let restored: Conversation[] = [];
     try {
-      restored = restoreConversations(sessionStorage.getItem(STORAGE_KEY));
+      restored = restoreConversations(sessionStorage.getItem(storageKey));
     } catch {
-      /* Continue in memory when browser storage is unavailable. */
+      /* Browser storage is optional. */
     }
-    if (restored.length) {
-      // Browser-only history is intentionally restored after hydration.
-      setConversations(restored);
-      setActiveId(restored[0].id);
-    }
+    const initial = restored.length ? restored : [createConversation()];
+    setConversations(initial);
+    setActiveId(initial[0].id);
     setHydrated(true);
-    return () => controller.current?.abort();
-  }, []);
-
+    const request = new AbortController();
+    controller.current = request;
+    void listDocuments({ signal: request.signal })
+      .then(setDocuments)
+      .catch((cause) => {
+        if (!request.signal.aborted)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "Could not load your documents.",
+          );
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setLoadingDocuments(false);
+      });
+    return () => {
+      request.abort();
+      controller.current?.abort();
+    };
+  }, [storageKey]);
   useEffect(() => {
     if (!hydrated) return;
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+      sessionStorage.setItem(storageKey, JSON.stringify(conversations));
     } catch {
-      /* The current session still works if browser storage is unavailable. */
+      /* Continue in memory when storage is unavailable. */
     }
-  }, [conversations, hydrated]);
+  }, [conversations, hydrated, storageKey]);
+  useEffect(
+    () => () => {
+      if (agent.isRunning) copilotkit.stopAgent({ agent });
+    },
+    [agent, copilotkit],
+  );
 
   useEffect(() => {
-    const referencedIds = new Set(
-      conversations.flatMap((item) =>
-        item.document ? [item.document.id] : [],
-      ),
-    );
-    for (const id of fileMap.current.keys()) {
-      if (!referencedIds.has(id)) fileMap.current.delete(id);
-    }
-    setAvailableFiles((ids) =>
-      ids.some((id) => !referencedIds.has(id))
-        ? ids.filter((id) => referencedIds.has(id))
-        : ids,
-    );
-  }, [conversations]);
-
-  useEffect(() => {
-    const file = document && fileMap.current.get(document.id);
-    const url = file ? URL.createObjectURL(file) : null;
-    // A preview URL follows the selected in-memory File and is revoked on change.
-    setPreviewUrl(url);
-    return () => {
-      if (url) URL.revokeObjectURL(url);
+    if (!isReady) return;
+    const sync = () => {
+      const run = activeRun.current;
+      if (!run || run.stopped) return;
+      const start = agent.messages.findIndex(
+        (message) => message.id === run.messageId,
+      );
+      if (start < 0) return;
+      const answer = agent.messages
+        .slice(start + 1)
+        .filter(
+          (message) =>
+            message.role === "assistant" && typeof message.content === "string",
+        )
+        .map((message) => message.content)
+        .join("\n\n");
+      const state = agent.state as Record<string, unknown>;
+      updateConversation(run.conversationId, (item) => ({
+        ...item,
+        turns: item.turns.map((turn) =>
+          turn.id === run.turnId
+            ? {
+                ...turn,
+                answer,
+                phase:
+                  typeof state.phase === "string" ? state.phase : undefined,
+                citations: citationsFromState(state.sources ?? state.citations),
+                webSources: webSourcesFromState(
+                  state.sources ?? state.web_sources,
+                ),
+              }
+            : turn,
+        ),
+      }));
     };
-  }, [document, availableFiles]);
+    const subscription = agent.subscribe({
+      onMessagesChanged: sync,
+      onStateChanged: sync,
+      onRunErrorEvent: () => {
+        if (activeRun.current)
+          activeRun.current.error =
+            "The assistant could not finish this answer. Please check the service configuration and try again.";
+      },
+      onToolCallStartEvent: ({ event }) => {
+        const run = activeRun.current;
+        if (!run || run.stopped) return;
+        const toolPhase = /search_web|web_search/i.test(event.toolCallName)
+          ? "web_search"
+          : /retriev|search_document/i.test(event.toolCallName)
+            ? "retrieving"
+            : "planning";
+        updateConversation(run.conversationId, (item) => ({
+          ...item,
+          turns: item.turns.map((turn) =>
+            turn.id === run.turnId ? { ...turn, phase: toolPhase } : turn,
+          ),
+        }));
+      },
+    });
+    return () => subscription.unsubscribe();
+  }, [agent, isReady, updateConversation]);
 
   useEffect(() => {
-    scrollEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [conversation.turns]);
-
+    if (followAnswer.current && scrollPanel.current)
+      scrollPanel.current.scrollTop = scrollPanel.current.scrollHeight;
+  }, [conversation?.turns]);
   useEffect(() => {
     if (!sidebarOpen) return;
-    const panel = sidebarRef.current;
     const previousFocus = window.document.activeElement as HTMLElement | null;
     const focusable = () =>
       Array.from(
-        panel?.querySelectorAll<HTMLElement>(
+        sidebarRef.current?.querySelectorAll<HTMLElement>(
           'button:not(:disabled), a[href], [tabindex="0"]',
         ) ?? [],
       ).filter((element) => element.getClientRects().length > 0);
     focusable()[0]?.focus();
-    function onKeyDown(event: KeyboardEvent) {
+    const onKeyDown = (event: KeyboardEvent) => {
       if (helpDialog.current?.open || clearDialog.current?.open) return;
-      if (event.key === "Escape") {
-        setSidebarOpen(false);
-      }
+      if (event.key === "Escape") setSidebarOpen(false);
       if (event.key !== "Tab") return;
       const elements = focusable();
       const first = elements[0];
@@ -163,7 +377,7 @@ export function Workspace() {
         event.preventDefault();
         first?.focus();
       }
-    }
+    };
     window.document.addEventListener("keydown", onKeyDown);
     return () => {
       window.document.removeEventListener("keydown", onKeyDown);
@@ -172,82 +386,61 @@ export function Workspace() {
   }, [sidebarOpen]);
 
   function chooseFile() {
-    if (!busy) {
-      documentDialog.current?.close();
-      fileInput.current?.click();
-    }
+    if (!busy) fileInput.current?.click();
   }
-  function updateConversation(
-    id: string,
-    change: (item: Conversation) => Conversation,
-  ) {
-    setConversations((items) =>
-      items.map((item) => (item.id === id ? change(item) : item)),
-    );
-  }
-  function switchConversation(id: string) {
+  function selectConversation(next: Conversation) {
     if (locked.current) return;
-    setActiveId(id);
+    if (agent.isRunning) copilotkit.stopAgent({ agent });
+    agent.threadId = next.id;
+    agent.setMessages(conversationMessages(next));
+    agent.setState({ document_ids: next.documentIds, web_enabled: webEnabled });
+    followAnswer.current = true;
+    setActiveId(next.id);
     setDraft("");
-    setUploadError("");
+    setError("");
     setNotice("");
     setSidebarOpen(false);
   }
   function newConversation() {
     if (locked.current) return;
-    const next = createConversation(document);
+    const next = createConversation(conversation?.documentIds ?? []);
     setConversations((items) =>
       [next, ...items.filter((item) => item.turns.length)].slice(0, 30),
     );
-    setActiveId(next.id);
-    setDraft("");
-    setNotice("");
-    setUploadError("");
-    setSidebarOpen(false);
+    selectConversation(next);
   }
-
-  async function attachFile(file: File) {
-    if (locked.current) return;
-    const error = validatePdf(file);
-    setUploadError(error ?? "");
-    if (error) return;
+  async function attachFiles(files: File[]) {
+    if (locked.current || !conversation || !files.length) return;
+    const invalid = files.map(validatePdf).find(Boolean);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
     locked.current = true;
     setPhase("uploading");
-    setUploadName(file.name);
-    setNotice("");
+    setError("");
     const request = new AbortController();
     controller.current = request;
     try {
-      await uploadDocument(file, { signal: request.signal });
-      const reattaching =
-        document &&
-        document.name === file.name &&
-        document.size === file.size &&
-        document.lastModified === file.lastModified;
-      const info: DocumentInfo = {
-        id: reattaching ? document.id : crypto.randomUUID(),
-        name: file.name,
-        size: file.size,
-        lastModified: file.lastModified,
-      };
-      fileMap.current.set(info.id, file);
-      setAvailableFiles((ids) => [...new Set([...ids, info.id])]);
-      if (hasMessages && !reattaching) {
-        const next = createConversation(info);
-        setConversations((items) => [next, ...items].slice(0, 30));
-        setActiveId(next.id);
-        setDraft("");
-      } else {
+      for (const file of files) {
+        setUploadName(file.name);
+        const document = await uploadDocument(file, { signal: request.signal });
+        setDocuments((items) => [
+          ...items.filter((item) => item.id !== document.id),
+          document,
+        ]);
         updateConversation(conversation.id, (item) => ({
           ...item,
-          document: info,
+          documentIds: [...new Set([...item.documentIds, document.id])],
         }));
       }
-      setNotice(`${file.name} is ready. Ask your first question.`);
-    } catch (error) {
-      setUploadError(
-        error instanceof Error
-          ? error.message
+      setNotice(
+        `${files.length} ${files.length === 1 ? "document is" : "documents are"} ready for questions.`,
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
           : "The upload failed. Please try again.",
       );
     } finally {
@@ -257,39 +450,76 @@ export function Workspace() {
       setUploadName("");
     }
   }
-
   function onDrop(event: DragEvent) {
     event.preventDefault();
     setDragging(false);
-    if (busy) return;
-    if (event.dataTransfer.files.length !== 1) {
-      setUploadError("Please upload one PDF at a time.");
-      return;
-    }
-    void attachFile(event.dataTransfer.files[0]);
+    if (!busy) void attachFiles(Array.from(event.dataTransfer.files));
   }
-
+  function toggleDocument(id: string) {
+    if (!conversation || busy) return;
+    updateConversation(conversation.id, (item) => ({
+      ...item,
+      documentIds: item.documentIds.includes(id)
+        ? item.documentIds.filter((value) => value !== id)
+        : [...item.documentIds, id],
+    }));
+  }
+  async function removeDocument(document: DocumentInfo) {
+    if (locked.current) return;
+    locked.current = true;
+    setPhase("uploading");
+    setError("");
+    try {
+      await deleteDocument(document.id);
+      setDocuments((items) => items.filter((item) => item.id !== document.id));
+      setConversations((items) =>
+        items.map((item) => ({
+          ...item,
+          documentIds: item.documentIds.filter((id) => id !== document.id),
+        })),
+      );
+      setNotice(`${document.name} deleted.`);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not delete this document.",
+      );
+    } finally {
+      locked.current = false;
+      setPhase("idle");
+    }
+  }
   async function sendQuestion(question = draft, retryId?: string) {
     const cleanQuestion = question.trim();
-    if (locked.current || !cleanQuestion || !document) return;
-    const file = fileMap.current.get(document.id);
-    if (!file) {
-      setUploadError("Reattach this document to continue the conversation.");
+    if (
+      locked.current ||
+      !isReady ||
+      !conversation ||
+      !cleanQuestion ||
+      !readyDocuments.length ||
+      (retryId !== undefined && conversation.turns.at(-1)?.id !== retryId)
+    )
       return;
-    }
     locked.current = true;
+    followAnswer.current = true;
     setPhase("answering");
+    setError("");
     setNotice("");
-    setUploadError("");
     if (!retryId) setDraft("");
-    const chatId = conversation.id;
+    const messageId = crypto.randomUUID();
+    const runId = crypto.randomUUID();
     const turn: Turn = {
+      messageId,
       id: retryId ?? crypto.randomUUID(),
       question: cleanQuestion,
-      documentName: document.name,
+      documentName: readyDocuments.map((document) => document.name).join(", "),
       status: "pending",
+      answer: "",
+      phase: "planning",
     };
-    updateConversation(chatId, (item) => ({
+    // Only the latest turn can be retried because the server retains conversation history.
+    updateConversation(conversation.id, (item) => ({
       ...item,
       title: item.turns.length ? item.title : cleanQuestion.slice(0, 60),
       turns: retryId
@@ -298,52 +528,89 @@ export function Workspace() {
           )
         : [...item.turns, turn],
     }));
-    const request = new AbortController();
-    controller.current = request;
+    agent.threadId = conversation.id;
+    agent.setMessages(conversationMessages(conversation, retryId));
+    agent.setState({
+      document_ids: readyDocuments.map((document) => document.id),
+      web_enabled: webEnabled,
+      phase: "planning",
+      sources: [],
+    });
+    const run: ActiveRun = {
+      conversationId: conversation.id,
+      turnId: turn.id,
+      messageId,
+      stopped: false,
+    };
+    activeRun.current = run;
+    agent.addMessage({ id: messageId, role: "user", content: cleanQuestion });
+    // Scope cancellation to this exact run so a delayed stop cannot cancel its retry.
+    copilotkit.setHeaders({ "x-documentai-run-id": runId });
     try {
-      // The legacy backend has one active PDF, so reselect this chat's file before each question.
-      await uploadDocument(file, { signal: request.signal });
-      const answer = await askQuestion(cleanQuestion, {
-        signal: request.signal,
-      });
-      updateConversation(chatId, (item) => ({
+      await copilotkit.runAgent({ agent, runId });
+      if (run.error) throw new Error(run.error);
+      if (
+        !run.stopped &&
+        !agent.messages.some(
+          (message) =>
+            message.role === "assistant" &&
+            typeof message.content === "string" &&
+            message.content.trim() &&
+            agent.messages.indexOf(message) >
+              agent.messages.findIndex((message) => message.id === messageId),
+        )
+      )
+        throw new Error("No answer was returned. Please try again.");
+      updateConversation(run.conversationId, (item) => ({
         ...item,
         turns: item.turns.map((previous) =>
           previous.id === turn.id
-            ? { ...turn, ...answer, status: "complete" }
+            ? { ...previous, status: run.stopped ? "stopped" : "complete" }
             : previous,
         ),
       }));
-    } catch (error) {
-      const stopped = error instanceof ApiError && error.code === "aborted";
-      updateConversation(chatId, (item) => ({
+    } catch (cause) {
+      updateConversation(run.conversationId, (item) => ({
         ...item,
         turns: item.turns.map((previous) =>
           previous.id === turn.id
             ? {
-                ...turn,
-                status: stopped ? "stopped" : "error",
-                error: stopped
+                ...previous,
+                status: run.stopped ? "stopped" : "error",
+                error: run.stopped
                   ? undefined
-                  : error instanceof Error
-                    ? error.message
-                    : "Something went wrong. Please try again.",
+                  : cause instanceof ApiError
+                    ? cause.message
+                    : "The assistant could not finish this answer. Please check the service configuration and try again.",
               }
             : previous,
         ),
       }));
     } finally {
+      if (activeRun.current === run) activeRun.current = null;
       locked.current = false;
-      controller.current = null;
       setPhase("idle");
     }
   }
-
+  function stopRun() {
+    const run = activeRun.current;
+    if (!run) return;
+    run.stopped = true;
+    updateConversation(run.conversationId, (item) => ({
+      ...item,
+      turns: item.turns.map((turn) =>
+        turn.id === run.turnId ? { ...turn, status: "stopped" } : turn,
+      ),
+    }));
+    copilotkit.stopAgent({ agent });
+  }
   function exportConversation() {
-    const blob = new Blob([conversationMarkdown(conversation)], {
-      type: "text/markdown;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
+    if (!conversation) return;
+    const url = URL.createObjectURL(
+      new Blob([conversationMarkdown(conversation)], {
+        type: "text/markdown;charset=utf-8",
+      }),
+    );
     const link = window.document.createElement("a");
     link.href = url;
     link.download = "document-ai-conversation.md";
@@ -351,18 +618,15 @@ export function Workspace() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     setNotice("Conversation exported as Markdown.");
   }
-
   function clearHistory() {
+    if (busy) return;
     const next = createConversation();
-    fileMap.current.clear();
-    setAvailableFiles([]);
     setConversations([next]);
-    setActiveId(next.id);
-    setDraft("");
-    setUploadError("");
-    setNotice("Local conversation history cleared.");
+    selectConversation(next);
     clearDialog.current?.close();
-    setSidebarOpen(false);
+    setNotice(
+      "Local conversation history cleared. Your document library is unchanged.",
+    );
   }
 
   const uploadZone = (
@@ -370,7 +634,7 @@ export function Workspace() {
       type="button"
       className={`upload-zone ${dragging ? "is-dragging" : ""}`}
       onClick={chooseFile}
-      disabled={busy}
+      disabled={busy || loadingDocuments}
       onDragOver={(event) => {
         event.preventDefault();
         if (!busy) setDragging(true);
@@ -385,16 +649,17 @@ export function Workspace() {
       )}
       <span className="upload-zone-copy">
         <strong>
-          {phase === "uploading" ? "Uploading your document…" : "Upload a PDF"}
+          {phase === "uploading" ? "Adding your documents…" : "Upload PDFs"}
         </strong>
         <span>
-          {phase === "uploading" ? uploadName : "Choose a file or drag it here"}
+          {phase === "uploading"
+            ? uploadName
+            : "Choose files or drag them here"}
         </span>
       </span>
-      <span className="file-requirement">Up to 20 MB</span>
+      <span className="file-requirement">Up to 20 MB each</span>
     </button>
   );
-
   return (
     <div className="workspace-shell">
       <a className="skip-link" href="#main-content">
@@ -404,14 +669,15 @@ export function Workspace() {
         ref={fileInput}
         data-testid="pdf-input"
         type="file"
+        multiple
         accept=".pdf,application/pdf"
         className="sr-only"
         tabIndex={-1}
-        aria-label="Upload PDF document"
+        aria-label="Upload PDF documents"
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          const files = Array.from(event.target.files ?? []);
           event.target.value = "";
-          if (file) void attachFile(file);
+          void attachFiles(files);
         }}
       />
       {sidebarOpen && (
@@ -444,7 +710,7 @@ export function Workspace() {
         <button
           className="new-chat-button"
           onClick={newConversation}
-          disabled={busy}
+          disabled={busy || !hydrated}
         >
           <Plus size={17} />
           New conversation
@@ -458,12 +724,10 @@ export function Workspace() {
                 <button
                   key={item.id}
                   title={item.title}
-                  className={`history-item ${item.id === conversation.id ? "history-active" : ""}`}
-                  aria-current={
-                    item.id === conversation.id ? "page" : undefined
-                  }
+                  className={`history-item ${item.id === activeId ? "history-active" : ""}`}
+                  aria-current={item.id === activeId ? "page" : undefined}
                   disabled={busy}
-                  onClick={() => switchConversation(item.id)}
+                  onClick={() => selectConversation(item)}
                 >
                   <MessageSquare size={15} />
                   <span>{item.title}</span>
@@ -486,15 +750,25 @@ export function Workspace() {
           <button
             className="sidebar-utility"
             onClick={() => clearDialog.current?.showModal()}
-            disabled={
-              busy ||
-              !conversations.some((item) => item.turns.length || item.document)
-            }
+            disabled={busy || !conversations.some((item) => item.turns.length)}
           >
             <Trash2 size={15} />
             Clear local history
           </button>
-          <p className="storage-note">History is saved in this browser tab.</p>
+          <p className="storage-note">
+            {user.kind === "github"
+              ? user.name || "Signed in with GitHub"
+              : "Private browser session"}
+            <br />
+            Chat history stays in this tab.
+          </p>
+          {user.kind === "github" && (
+            <form action="/api/auth/signout" method="get">
+              <button className="sidebar-utility" type="submit">
+                Sign out
+              </button>
+            </form>
+          )}
         </div>
       </aside>
       <div className="workspace-main" inert={sidebarOpen}>
@@ -507,17 +781,23 @@ export function Workspace() {
             >
               <Menu size={20} />
             </button>
-            <span title={conversation.title}>{conversation.title}</span>
+            <span title={conversation?.title}>
+              {conversation?.title || "New conversation"}
+            </span>
           </div>
           <div className="topbar-actions">
             <button
               className="header-button"
-              aria-label="Show document"
+              aria-label="Show documents"
               onClick={() => documentDialog.current?.showModal()}
             >
               <FileText size={16} />
-              <span>Document</span>
-              {document && <span className="document-count">1</span>}
+              <span>Documents</span>
+              {selectedDocuments.length > 0 && (
+                <span className="document-count">
+                  {selectedDocuments.length}
+                </span>
+              )}
             </button>
             <button
               className="header-button"
@@ -534,15 +814,25 @@ export function Workspace() {
           <section
             className={`conversation-scroll ${hasMessages ? "has-messages" : ""}`}
             aria-label="Conversation"
+            ref={scrollPanel}
+            onScroll={(event) => {
+              const panel = event.currentTarget;
+              followAnswer.current =
+                panel.scrollHeight - panel.scrollTop - panel.clientHeight < 100;
+            }}
           >
             {hasMessages ? (
               <div className="transcript">
-                <h1 className="sr-only">{conversation.title}</h1>
-                {conversation.turns.map((turn) => (
+                <h1 className="sr-only">{conversation?.title}</h1>
+                {conversation?.turns.map((turn, index) => (
                   <AnswerCard
                     key={turn.id}
                     turn={turn}
-                    retryDisabled={busy || !hasFile}
+                    retryDisabled={
+                      busy ||
+                      !readyDocuments.length ||
+                      index !== conversation.turns.length - 1
+                    }
                     onRetry={() => void sendQuestion(turn.question, turn.id)}
                   />
                 ))}
@@ -550,33 +840,42 @@ export function Workspace() {
               </div>
             ) : (
               <div className="welcome-content">
-                <h1>Ask your document</h1>
+                <h1>Ask your documents</h1>
                 <p className="welcome-description">
-                  Upload a PDF to get summaries, find answers, and explore
-                  related information.
+                  Upload PDFs, compare their findings, and get answers with
+                  sources.
                 </p>
-                {hasFile && phase !== "uploading" ? (
+                {readyDocuments.length && phase !== "uploading" ? (
                   <div className="ready-document">
-                    <FileText size={22} strokeWidth={1.6} />
+                    <FileText size={22} />
                     <div>
-                      <strong>{document?.name}</strong>
+                      <strong>
+                        {readyDocuments.length === 1
+                          ? readyDocuments[0].name
+                          : `${readyDocuments.length} documents selected`}
+                      </strong>
                       <span>
                         <Check size={13} />
                         Ready for questions
                       </span>
                     </div>
                     <button
-                      className="icon-button"
-                      aria-label="Replace document"
-                      title="Replace document"
-                      onClick={chooseFile}
-                      disabled={busy}
+                      className="secondary-button"
+                      onClick={() => documentDialog.current?.showModal()}
                     >
-                      <Upload size={17} />
+                      Manage
                     </button>
                   </div>
                 ) : (
                   uploadZone
+                )}
+                {documents.length > 0 && !readyDocuments.length && (
+                  <button
+                    className="library-link"
+                    onClick={() => documentDialog.current?.showModal()}
+                  >
+                    Choose from your library ({documents.length})
+                  </button>
                 )}
                 <div className="suggestions" aria-label="Suggested questions">
                   {suggestions.map(({ title, prompt }) => (
@@ -597,185 +896,216 @@ export function Workspace() {
             )}
           </section>
           <div className="composer-area">
-            {uploadError && (
+            {error && (
               <div className="inline-alert" role="alert">
                 <CircleHelp size={16} />
-                <span>{uploadError}</span>
+                <span>{error}</span>
                 <button
                   className="icon-button"
                   aria-label="Dismiss error"
-                  onClick={() => setUploadError("")}
+                  onClick={() => setError("")}
                 >
                   <X size={15} />
-                </button>
-              </div>
-            )}
-            {document && !hasFile && (
-              <div className="reattach-notice">
-                <FileText size={15} />
-                <span>
-                  Reattach <strong>{document.name}</strong> to ask more
-                  questions.
-                </span>
-                <button onClick={chooseFile} disabled={busy}>
-                  Browse files
                 </button>
               </div>
             )}
             {phase === "uploading" && hasMessages && (
               <p className="upload-progress" role="status">
                 <LoaderCircle className="animate-spin" size={15} />
-                Uploading {uploadName}…
+                Adding {uploadName}…
               </p>
             )}
             <span className="sr-only" role="status">
               {notice}
             </span>
+            <div className="retrieval-controls">
+              <button
+                disabled={busy}
+                onClick={() => documentDialog.current?.showModal()}
+              >
+                {readyDocuments.length}{" "}
+                {readyDocuments.length === 1 ? "document" : "documents"}{" "}
+                selected
+              </button>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={webEnabled}
+                  disabled={busy || !availableWebSearch}
+                  onChange={(event) => setWebPreference(event.target.checked)}
+                />
+                {availableWebSearch
+                  ? "Include web search"
+                  : "Web search unavailable"}
+              </label>
+            </div>
             <Composer
-              key={conversation.id}
+              key={activeId}
               value={draft}
               onChange={setDraft}
               onSubmit={() => void sendQuestion()}
-              onStop={() => controller.current?.abort()}
-              disabled={phase === "uploading"}
+              onStop={stopRun}
+              disabled={phase === "uploading" || !isReady || loadingDocuments}
               busy={phase === "answering"}
-              hasDocument={hasFile}
+              hasDocument={readyDocuments.length > 0}
               onUpload={chooseFile}
             />
+            {!isReady && (
+              <p className="meta-text" role="status">
+                Connecting to the assistant…
+              </p>
+            )}
           </div>
         </main>
       </div>
       <dialog
         ref={documentDialog}
-        aria-labelledby="document-panel-title"
         className="document-dialog"
-        onClick={(event) => {
-          if (event.target === event.currentTarget)
-            documentDialog.current?.close();
-        }}
+        aria-labelledby="documents-title"
       >
         <div className="document-dialog-content">
           <div className="document-panel-header">
-            <h2 id="document-panel-title">Document</h2>
+            <h2 id="documents-title">Your documents</h2>
             <button
               className="icon-button"
-              aria-label="Close document"
+              aria-label="Close documents"
               onClick={() => documentDialog.current?.close()}
             >
-              <X size={20} />
+              <X size={18} />
             </button>
           </div>
-          {document ? (
-            <div className="document-details">
-              <FileText size={25} strokeWidth={1.6} />
-              <h3>{document.name}</h3>
-              <p className="meta-text">PDF · {formatSize(document.size)}</p>
-              <p className={`document-status ${hasFile ? "" : "needs-file"}`}>
-                {hasFile ? <Check size={14} /> : <Upload size={14} />}
-                {hasFile ? "Ready for questions" : "Reattach to continue"}
+          <div className="document-details">
+            <p className="document-library-hint">
+              Select the documents to search in this conversation.
+            </p>
+            {loadingDocuments ? (
+              <p role="status">Loading your documents…</p>
+            ) : documents.length ? (
+              <ul className="document-library">
+                {documents.map((document) => (
+                  <li key={document.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(
+                          conversation?.documentIds.includes(document.id),
+                        )}
+                        disabled={busy || document.status !== "ready"}
+                        onChange={() => toggleDocument(document.id)}
+                      />
+                      <span>
+                        <strong>{document.name}</strong>
+                        <small>
+                          {formatSize(document.size)} · {document.pages} pages ·{" "}
+                          {document.status === "ready"
+                            ? "Ready"
+                            : document.status}
+                        </small>
+                      </span>
+                    </label>
+                    <button
+                      className="icon-button"
+                      aria-label={`Delete ${document.name}`}
+                      disabled={busy}
+                      onClick={() => void removeDocument(document)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="empty-source">Your library is empty.</p>
+            )}
+            <button
+              className="primary-button"
+              onClick={chooseFile}
+              disabled={busy || loadingDocuments}
+            >
+              <Plus size={16} />
+              Add documents
+            </button>
+            {phase === "uploading" && (
+              <p className="upload-progress" role="status">
+                Adding {uploadName}…
               </p>
-              <div className="document-actions">
-                {previewUrl && (
-                  <a
-                    className="secondary-button"
-                    href={previewUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open PDF
-                    <ArrowUpRight size={15} />
-                  </a>
-                )}
-                <button
-                  className="secondary-button"
-                  onClick={chooseFile}
-                  disabled={busy}
-                >
-                  <Upload size={15} />
-                  {hasFile ? "Replace document" : "Reattach document"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="document-details">
-              <p className="empty-source">No document attached.</p>
-              <button
-                className="primary-button"
-                onClick={chooseFile}
-                disabled={busy}
-              >
-                <Plus size={16} />
-                Add a document
-              </button>
-            </div>
-          )}
+            )}
+            {error && (
+              <p className="document-library-error" role="alert">
+                {error}
+              </p>
+            )}
+          </div>
           <p className="source-hint">
-            One PDF per conversation. Uploading a different document starts a
-            new chat.
+            Documents are saved to your workspace. You can select several for
+            one question.
           </p>
         </div>
       </dialog>
       <dialog
         ref={helpDialog}
-        aria-labelledby="help-title"
         className="workspace-dialog"
-        onClick={(event) => {
-          if (event.target === event.currentTarget) helpDialog.current?.close();
-        }}
+        aria-labelledby="help-title"
       >
         <button
-          className="dialog-close icon-button"
+          className="icon-button dialog-close"
           aria-label="Close getting started"
           onClick={() => helpDialog.current?.close()}
         >
-          <X size={20} />
+          <X size={18} />
         </button>
         <h2 id="help-title">Getting started</h2>
         <ol className="help-steps">
           <li>
-            <strong>Upload a PDF</strong>
-            <p>Choose one document, up to 20 MB.</p>
-          </li>
-          <li>
-            <strong>Ask a question</strong>
+            <strong>Add your PDFs</strong>
             <p>
-              Read the document answer and web answer. Each question is
-              independent, so include the context you need.
+              Upload one or more PDFs. They stay in your document library for
+              future conversations.
             </p>
           </li>
           <li>
-            <strong>Keep your answers</strong>
+            <strong>Choose what to search</strong>
             <p>
-              Copy a response or export the chat. History stays in this browser
-              tab; reattach your PDF after a refresh.
+              Use Documents to select the PDFs for this chat. Turn web search on
+              when you need external context.
+            </p>
+          </li>
+          <li>
+            <strong>Ask and check sources</strong>
+            <p>
+              Read the answer as it arrives, follow the progress, and open
+              Sources to check document pages and web references.
             </p>
           </li>
         </ol>
-        <button
-          className="primary-button"
-          onClick={() => helpDialog.current?.close()}
-        >
-          Got it
-        </button>
+        <p>
+          {user.kind === "session"
+            ? "Your library belongs to this browser session. Clearing its session cookie loses access; use account sign-in for access across browsers."
+            : "Your library belongs to your signed-in account."}
+        </p>
       </dialog>
       <dialog
         ref={clearDialog}
-        aria-labelledby="clear-title"
         className="workspace-dialog"
+        aria-labelledby="clear-title"
       >
-        <h2 id="clear-title">Clear your local history?</h2>
+        <h2 id="clear-title">Clear local history?</h2>
         <p>
-          This removes conversations and attached files from this browser tab.
-          It does not delete files from the server.
+          This removes conversation history from this tab. Your uploaded
+          documents stay in your library.
         </p>
         <div className="dialog-actions">
           <button
             className="secondary-button"
             onClick={() => clearDialog.current?.close()}
           >
-            Keep history
+            Cancel
           </button>
-          <button className="primary-button" onClick={clearHistory}>
+          <button
+            className="primary-button"
+            onClick={clearHistory}
+            disabled={busy}
+          >
             Clear history
           </button>
         </div>

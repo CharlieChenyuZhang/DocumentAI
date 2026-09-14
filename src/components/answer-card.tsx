@@ -20,12 +20,15 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./answer-card.css";
+import { phaseLabel, type Citation, type WebSource } from "../lib/workspace";
 
 export interface AnswerTurn {
   id: string;
   question: string;
-  ragAnswer?: string;
-  mcpAnswer?: string;
+  answer?: string;
+  phase?: string;
+  citations?: Citation[];
+  webSources?: WebSource[];
   status: "pending" | "complete" | "error" | "stopped";
   error?: string;
   documentName: string;
@@ -97,12 +100,7 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const answerText = [
-    turn.ragAnswer ? `Document answer\n\n${turn.ragAnswer}` : "",
-    turn.mcpAnswer ? `Web answer\n\n${turn.mcpAnswer}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const answerText = turn.answer ?? "";
 
   useEffect(() => {
     return () => {
@@ -191,7 +189,7 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
               <i />
               <i />
             </span>
-            <p>Reading your document and searching the web</p>
+            <p>{phaseLabel(turn.phase)}</p>
           </div>
         )}
 
@@ -222,43 +220,57 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
           </div>
         )}
 
-        {turn.status === "complete" && (
+        {(turn.status === "complete" || Boolean(turn.answer)) && (
           <>
             <div className="answer-body" ref={bodyRef}>
-              <section
-                className="answer-source-section"
-                aria-label="Document answer"
-              >
-                <h3 className="answer-source-title">
-                  <FileText size={14} aria-hidden="true" /> Document answer
-                </h3>
-                <div className="answer-markdown">
-                  {turn.ragAnswer ? (
-                    <SafeMarkdown>{turn.ragAnswer}</SafeMarkdown>
-                  ) : (
-                    <p className="answer-empty">
-                      No document answer was returned.
-                    </p>
-                  )}
-                </div>
+              <section aria-label="Answer" className="answer-markdown">
+                <SafeMarkdown>
+                  {turn.answer || "No answer was returned."}
+                </SafeMarkdown>
               </section>
-              <section
-                className="answer-source-section answer-web-section"
-                aria-label="Web answer"
-              >
-                <h3 className="answer-source-title">
-                  <Globe2 size={14} aria-hidden="true" /> Web answer
-                </h3>
-                <div className="answer-markdown">
-                  {turn.mcpAnswer ? (
-                    <SafeMarkdown>{turn.mcpAnswer}</SafeMarkdown>
-                  ) : (
-                    <p className="answer-empty">No web answer was returned.</p>
-                  )}
-                </div>
-              </section>
+              {(Boolean(turn.citations?.length) ||
+                Boolean(turn.webSources?.length)) && (
+                <details className="answer-citations">
+                  <summary>
+                    Sources (
+                    {(turn.citations?.length ?? 0) +
+                      (turn.webSources?.length ?? 0)}
+                    )
+                  </summary>
+                  <ul>
+                    {turn.citations?.map((source, index) => (
+                      <li key={`${source.document_id}:${source.page}:${index}`}>
+                        <FileText size={13} />
+                        <a
+                          href={`/api/documents/${encodeURIComponent(source.document_id)}#page=${source.page}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {source.id ? `[${source.id}] ` : ""}
+                          {source.document_name}, page {source.page}
+                        </a>
+                      </li>
+                    ))}
+                    {turn.webSources
+                      ?.filter((source) => /^https?:\/\//i.test(source.url))
+                      .map((source) => (
+                        <li key={source.url}>
+                          <Globe2 size={13} />
+                          <a
+                            href={source.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {source.id ? `[${source.id}] ` : ""}
+                            {source.title}
+                          </a>
+                        </li>
+                      ))}
+                  </ul>
+                </details>
+              )}
             </div>
-            {answerText && (
+            {answerText && turn.status !== "pending" && (
               <div className="answer-actions">
                 <button
                   className="answer-action"

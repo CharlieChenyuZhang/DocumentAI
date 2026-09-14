@@ -1,0 +1,16 @@
+google-adk==2.9.0
+ag-ui-adk==0.7.0
+litellm==1.100.1
+fastapi==0.141.1
+uvicorn==0.52.4
+python-multipart==0.0.32
+python-dotenv==1.2.3
+langchain-community==0.4.2
+langchain-text-splitters==1.1.2
+langchain-openai==1.6.2
+pypdf==6.18.1
+pinecone==10.0.0
+aiosqlite==0.22.1
+httpx==0.28.1
+mcp==2.2.0
+sqlalchemy[asyncio]==2.0.52

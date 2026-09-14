@@ -22,9 +22,20 @@ export class ApiError extends Error {
 
 export type RequestOptions = { signal?: AbortSignal };
 
-export type ChatResponse = {
-  ragAnswer: string;
-  mcpAnswer: string;
+export type DocumentInfo = {
+  id: string;
+  name: string;
+  size: number;
+  pages: number;
+  chunks: number;
+  status: string;
+  created_at: string;
+};
+export type SessionInfo = {
+  user: { id: string; name?: string; kind: "session" | "github" } | null;
+  authMode: "session" | "github";
+  authenticated: boolean;
+  configuration?: Record<string, unknown>;
 };
 
 /** Matches the PDF-only loader supported by the existing backend. */
@@ -44,13 +55,19 @@ export function validatePdf(file: File): string | null {
   return null;
 }
 
-function endpoint(path: string): string {
-  const base =
-    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || "http://localhost:5001";
-  return `${base.replace(/\/+$/, "")}/${path}`;
-}
-
 function httpError(status: number): ApiError {
+  if (status === 401)
+    return new ApiError(
+      "Your session has expired. Reload the page to sign in.",
+      "http",
+      status,
+    );
+  if (status === 503)
+    return new ApiError(
+      "Document AI is not configured or is temporarily unavailable. Please try again after the service is ready.",
+      "http",
+      status,
+    );
   if (status === 413) {
     return new ApiError(
       "The server rejected this document because it is too large.",
@@ -95,7 +112,9 @@ async function request<T>(
   const timeout = setTimeout(() => abort("timeout"), timeoutMs);
 
   try {
-    const response = await fetch(endpoint(path), {
+    const response = await fetch(`/api/${path}`, {
+      credentials: "same-origin",
+      cache: "no-store",
       ...init,
       signal: controller.signal,
     });
@@ -128,80 +147,114 @@ async function request<T>(
   }
 }
 
-export async function uploadDocument(
-  file: File,
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function validDocument(value: unknown): value is DocumentInfo {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.size === "number" &&
+    typeof value.pages === "number" &&
+    typeof value.chunks === "number" &&
+    typeof value.status === "string" &&
+    typeof value.created_at === "string"
+  );
+}
+async function json(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new ApiError(
+      "The server returned an unreadable response. Please try again.",
+      "invalid-response",
+    );
+  }
+}
+function invalidResponse(): never {
+  throw new ApiError(
+    "The server returned an unexpected response. Please try again.",
+    "invalid-response",
+  );
+}
+export async function getSession(
   options: RequestOptions = {},
-): Promise<string> {
-  const validationError = validatePdf(file);
-  if (validationError) throw new ApiError(validationError, "validation");
-
-  const body = new FormData();
-  body.append("file", file);
-
+): Promise<SessionInfo> {
   return request(
-    "upload",
-    { method: "POST", body },
+    "session",
+    { method: "GET" },
     options,
-    60_000,
+    30_000,
     async (response) => {
-      const result = await response.text();
-      // Express sends this plain-text acknowledgement with a text/html content type.
-      // Check the body instead so a proxy's HTML error page is never shown as success.
-      if (!result.trim() || /^\s*</.test(result)) {
-        throw new ApiError(
-          "The server returned an unexpected upload response. Please try again.",
-          "invalid-response",
-        );
-      }
-      return result;
+      const result = await json(response);
+      if (
+        !isRecord(result) ||
+        typeof result.authenticated !== "boolean" ||
+        !["session", "github"].includes(String(result.authMode))
+      )
+        return invalidResponse();
+      if (
+        result.authenticated &&
+        (!isRecord(result.user) ||
+          typeof result.user.id !== "string" ||
+          !["session", "github"].includes(String(result.user.kind)))
+      )
+        return invalidResponse();
+      return result as SessionInfo;
     },
   );
 }
-
-export async function askQuestion(
-  question: string,
+export async function listDocuments(
   options: RequestOptions = {},
-): Promise<ChatResponse> {
-  const trimmedQuestion = question.trim();
-  if (!trimmedQuestion) {
-    throw new ApiError("Enter a question about your document.", "validation");
-  }
-
-  const query = new URLSearchParams({ question: trimmedQuestion });
+): Promise<DocumentInfo[]> {
   return request(
-    `chat?${query.toString()}`,
-    {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    },
+    "documents",
+    { method: "GET" },
     options,
-    120_000,
+    30_000,
     async (response) => {
-      let result: unknown;
-      try {
-        result = await response.json();
-      } catch (error) {
-        if (!(error instanceof SyntaxError)) throw error;
-        throw new ApiError(
-          "The server returned an unreadable answer. Please try again.",
-          "invalid-response",
-        );
-      }
+      const result = await json(response);
       if (
-        typeof result !== "object" ||
-        result === null ||
-        !("ragAnswer" in result) ||
-        !("mcpAnswer" in result) ||
-        typeof result.ragAnswer !== "string" ||
-        typeof result.mcpAnswer !== "string"
-      ) {
-        throw new ApiError(
-          "The server returned an incomplete answer. Please try again.",
-          "invalid-response",
-        );
-      }
-      return { ragAnswer: result.ragAnswer, mcpAnswer: result.mcpAnswer };
+        !isRecord(result) ||
+        !Array.isArray(result.documents) ||
+        !result.documents.every(validDocument)
+      )
+        return invalidResponse();
+      return result.documents;
     },
+  );
+}
+export async function uploadDocument(
+  file: File,
+  options: RequestOptions = {},
+): Promise<DocumentInfo> {
+  const validationError = validatePdf(file);
+  if (validationError) throw new ApiError(validationError, "validation");
+  const body = new FormData();
+  body.append("file", file);
+  return request(
+    "documents",
+    { method: "POST", body },
+    options,
+    180_000,
+    async (response) => {
+      const result = await json(response);
+      if (!isRecord(result) || !validDocument(result.document))
+        return invalidResponse();
+      return result.document;
+    },
+  );
+}
+export async function deleteDocument(
+  id: string,
+  options: RequestOptions = {},
+): Promise<void> {
+  return request(
+    `documents/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    options,
+    30_000,
+    async () => undefined,
   );
 }

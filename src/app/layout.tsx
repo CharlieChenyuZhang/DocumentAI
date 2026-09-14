@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Document AI | Chat with your documents",
   description:
-    "Upload a PDF, ask questions, and read document and web answers in one simple workspace.",
+    "Search your private document library, compare PDFs, and get streamed answers with document and web sources.",
 };
 
 export default function RootLayout({

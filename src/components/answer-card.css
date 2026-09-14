@@ -401,3 +401,29 @@
     opacity: 0.65;
   }
 }
+
+.answer-citations {
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.answer-citations summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+.answer-citations ul {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+}
+.answer-citations li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 5px 0;
+  overflow-wrap: anywhere;
+}
+.answer-citations a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

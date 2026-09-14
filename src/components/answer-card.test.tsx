@@ -5,8 +5,8 @@ import { AnswerCard, type AnswerTurn } from "./answer-card";
 const completeTurn: AnswerTurn = {
   id: "turn-1",
   question: "What are the key findings?",
-  ragAnswer: "The document describes **three findings**.",
-  mcpAnswer: "[More context](https://example.com/context)",
+  answer:
+    "The document describes **three findings**. [More context](https://example.com/context)",
   status: "complete",
   documentName: "Research report.pdf",
 };
@@ -14,28 +14,27 @@ const completeTurn: AnswerTurn = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("AnswerCard", () => {
-  it("keeps document and web answers distinct and renders safe Markdown", () => {
+  it("renders unified streamed answers with safe Markdown", () => {
     const { container } = render(
       <AnswerCard
         turn={{
           ...completeTurn,
-          ragAnswer:
-            "**A finding**\n\n<script>alert('untrusted')</script>\n\n![External image](https://example.com/track.png)\n\n[Unsafe](javascript:alert(1))",
+          answer:
+            "**A finding**\n\n<script>alert('untrusted')</script>\n\n![External image](https://example.com/track.png)\n\n[Unsafe](javascript:alert(1))\n\n[More context](https://example.com/context)",
         }}
         onRetry={vi.fn()}
         retryDisabled={false}
       />,
     );
     expect(
-      within(screen.getByRole("region", { name: "Document answer" })).getByText(
+      within(screen.getByRole("region", { name: "Answer" })).getByText(
         "A finding",
       ).tagName,
     ).toBe("STRONG");
     expect(
-      within(screen.getByRole("region", { name: "Web answer" })).getByRole(
-        "link",
-        { name: "More context" },
-      ),
+      within(screen.getByRole("region", { name: "Answer" })).getByRole("link", {
+        name: "More context",
+      }),
     ).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("Research report.pdf")).toBeInTheDocument();
     expect(container.querySelector("script")).toBeNull();
@@ -46,7 +45,7 @@ describe("AnswerCard", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("copies both complete answers and acknowledges success", async () => {
+  it("copies the unified answer and acknowledges success", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     render(
@@ -60,9 +59,7 @@ describe("AnswerCard", () => {
     expect(
       await screen.findByRole("button", { name: "Answer copied" }),
     ).toBeInTheDocument();
-    expect(writeText).toHaveBeenCalledWith(
-      `Document answer\n\n${completeTurn.ragAnswer}\n\nWeb answer\n\n${completeTurn.mcpAnswer}`,
-    );
+    expect(writeText).toHaveBeenCalledWith(completeTurn.answer);
   });
 
   it("reports clipboard permission failure", async () => {
@@ -88,13 +85,13 @@ describe("AnswerCard", () => {
     const retry = vi.fn();
     const { rerender } = render(
       <AnswerCard
-        turn={{ ...completeTurn, status: "pending" }}
+        turn={{ ...completeTurn, status: "pending", answer: "" }}
         onRetry={retry}
         retryDisabled
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Reading your document and searching the web",
+      "Working on your question",
     );
     expect(
       screen.queryByRole("button", { name: "Copy answer" }),
@@ -121,7 +118,7 @@ describe("AnswerCard", () => {
         retryDisabled={false}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Response stopped");
+    expect(screen.getByText("Response stopped")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retry).toHaveBeenCalledOnce();
   });
@@ -157,4 +154,38 @@ describe("AnswerCard", () => {
     expect(secondUtterance.onerror).toBeNull();
     expect(cancel).toHaveBeenCalledTimes(3);
   });
+});
+
+it("shows partial text and source markers while keeping completed-answer actions unavailable", () => {
+  render(
+    <AnswerCard
+      turn={{
+        ...completeTurn,
+        status: "pending",
+        phase: "retrieving",
+        answer: "A partial finding [D1].",
+        citations: [
+          { id: "D1", document_id: "doc-1", document_name: "One.pdf", page: 2 },
+        ],
+        webSources: [
+          { id: "W1", title: "Unsafe source", url: "javascript:alert(1)" },
+        ],
+      }}
+      onRetry={vi.fn()}
+      retryDisabled
+    />,
+  );
+  expect(screen.getByRole("region", { name: "Answer" })).toHaveTextContent(
+    "partial finding",
+  );
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Searching your documents",
+  );
+  expect(
+    screen.queryByRole("button", { name: "Copy answer" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("[D1] One.pdf, page 2")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("link", { name: "Unsafe source" }),
+  ).not.toBeInTheDocument();
 });

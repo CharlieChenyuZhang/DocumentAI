@@ -231,8 +231,8 @@ export function Composer({
           aria-describedby={hintId}
           placeholder={
             hasDocument
-              ? "Ask anything about your document..."
-              : "Upload a PDF to get started"
+              ? "Ask about your selected documents..."
+              : "Select PDFs to get started"
           }
           value={value}
           rows={2}
@@ -265,10 +265,10 @@ export function Composer({
             </button>
             <span
               className="doc-composer-source"
-              title="Answers use document retrieval and web search"
+              title="Answers use your selected sources"
             >
               <Globe2 size={13} strokeWidth={1.7} aria-hidden="true" />
-              Document + web
+              Selected sources
             </span>
           </div>
           <div className="doc-composer-tools">
