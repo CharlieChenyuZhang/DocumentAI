@@ -3,21 +3,15 @@
 }
 
 .doc-composer {
-  padding: 17px 16px 12px;
-  border: 1px solid #dedfd6;
-  border-radius: 17px;
-  background: #fffefa;
-  box-shadow:
-    0 3px 14px #243c2b05,
-    0 1px 3px #243c2b03;
-  transition:
-    border-color 150ms,
-    box-shadow 150ms;
+  padding: 16px 14px 10px;
+  border: 1px solid #e5e7e1;
+  border-radius: 12px;
+  background: #fff;
+  transition: border-color 150ms;
 }
 
 .doc-composer:focus-within {
-  border-color: #8eaa96;
-  box-shadow: 0 0 0 3px #6e937510;
+  border-color: #2f4938;
 }
 
 .doc-composer-input {
@@ -32,7 +26,7 @@
   border-radius: 0;
   outline: none;
   background: transparent;
-  color: #29382c;
+  color: #252723;
   font: inherit;
   font-size: 14px;
   line-height: 1.7;
@@ -40,7 +34,7 @@
 }
 
 .doc-composer-input::placeholder {
-  color: #949b90;
+  color: #6c7168;
 }
 
 .doc-composer-toolbar,
@@ -55,7 +49,7 @@
 }
 
 .doc-composer-tools {
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -65,13 +59,13 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #788271;
+  color: #6c7168;
   cursor: pointer;
   transition:
     background 150ms,
@@ -80,13 +74,13 @@
 }
 
 .doc-composer-icon:hover:not(:disabled) {
-  background: #eef0e8;
-  color: #304a37;
+  background: #f3f4f0;
+  color: #2f4938;
 }
 
 .doc-composer-icon:focus-visible,
 .doc-composer-send:focus-visible {
-  outline: 2px solid #698671;
+  outline: 2px solid #2f4938;
   outline-offset: 3px;
 }
 
@@ -99,22 +93,15 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 8px;
-  border: 1px solid #e8eae1;
-  border-radius: 6px;
-  background: #f8f9f3;
-  color: #707d67;
-  font-size: 10px;
-  font-weight: 500;
+  color: #6c7168;
+  font-size: 12px;
   line-height: 1.3;
   white-space: nowrap;
 }
 
 .doc-composer-send {
-  width: 34px;
-  height: 34px;
   border-radius: 50%;
-  background: #2e4436;
+  background: #2f4938;
   color: #fff;
 }
 
@@ -123,25 +110,25 @@
 }
 
 .doc-composer-send:disabled {
-  background: #dce1d7;
-  color: #fefefa;
+  background: #eef0eb;
+  color: #7b8176;
   cursor: not-allowed;
 }
 
 .doc-composer-listening {
-  border-color: #789783;
+  border-color: #2f4938;
 }
 
 .doc-composer-mic-active {
-  background: #e4eee5;
-  color: #356741;
+  background: #edf2ed;
+  color: #2f4938;
 }
 
 .doc-composer-caption {
   margin-top: 10px;
   padding: 0 6px;
-  color: #93998d;
-  font-size: 10px;
+  color: #6c7168;
+  font-size: 11px;
   line-height: 1.5;
   text-align: center;
 }
@@ -152,11 +139,9 @@
   justify-content: space-between;
   gap: 10px;
   margin-top: 10px;
-  padding: 6px 8px 6px 12px;
-  border-radius: 9px;
-  background: #fff0e9;
-  color: #93522f;
-  font-size: 12px;
+  padding: 0 2px;
+  color: #994a3c;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -170,7 +155,9 @@
   .doc-composer-tools {
     gap: 5px;
   }
-  .doc-composer-source {
-    font-size: 9px;
+  .doc-composer-icon,
+  .doc-composer-send {
+    width: 44px;
+    height: 44px;
   }
 }

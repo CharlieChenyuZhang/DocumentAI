@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Document AI | A little more understanding",
+  title: "Document AI | Chat with your documents",
   description:
-    "A thoughtful workspace for your documents. Ask questions, explore ideas, and connect document knowledge with the web.",
+    "Upload a PDF, ask questions, and read document and web answers in one simple workspace.",
 };
 
 export default function RootLayout({

@@ -30,12 +30,16 @@ npm start
 
 ## Workspace features
 
-- Responsive conversation workspace with a document panel and keyboard-accessible mobile drawers.
+- Two-column workspace with chat history and a focused conversation area. Document details open on demand in a keyboard-accessible drawer.
 - Single-PDF upload by browsing or drag and drop, with file validation, loading feedback, and recoverable errors. The frontend limits uploads to 20 MiB.
 - Separate document and web answers with safe Markdown, code blocks, tables, copy, and read aloud when supported by the browser.
 - Suggested questions, editable voice dictation when supported, IME-safe keyboard submission, retry, and cancellation of local waiting.
 - Conversation history in this browser tab, Markdown export, and explicit local-history clearing.
 - No remote fonts or generated-answer image requests. Answer links only allow HTTP, HTTPS, and mailto URLs.
+
+## Layout references
+
+The layout draws on [ChatPDF](https://www.chatpdf.com/)'s direct upload-and-chat workflow, [NotebookLM](https://blog.google/innovation-and-ai/models-and-research/google-labs/notebooklm-new-features-december-2024/)'s task-focused panels, and [Claude Projects](https://www.anthropic.com/news/projects)' organization of chats and reference material. For this single-document app, the default view is limited to history and chat. Document details appear on request, and short suggested questions replace large cards. The layout uses readable sans-serif text, light borders, and a single accent color.
 
 ## Unchanged backend contract
 

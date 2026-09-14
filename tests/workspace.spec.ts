@@ -48,8 +48,8 @@ async function pdfFixture(testInfo: TestInfo, name = "customer-discovery.pdf") {
 async function attachPdf(page: Page, path: string) {
   await page.getByTestId("pdf-input").setInputFiles(path);
   await expect(
-    page.getByText("Ready for questions", { exact: true }),
-  ).toBeVisible();
+    page.getByRole("textbox", { name: "Your question" }),
+  ).toHaveAttribute("placeholder", "Ask anything about your document...");
 }
 
 async function ask(page: Page, question: string) {
@@ -122,7 +122,7 @@ test("starts empty and requires a document before sending", async ({
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Good questions. Grounded answers." }),
+    page.getByRole("heading", { name: "Ask your document" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Export chat" }),
@@ -130,12 +130,15 @@ test("starts empty and requires a document before sending", async ({
   await expect(
     page.getByRole("button", { name: "Send question" }),
   ).toBeDisabled();
+  await expect(
+    page.getByRole("dialog", { name: "Document", exact: true }),
+  ).toHaveCount(0);
   await page.screenshot({
     path: testInfo.outputPath("desktop-empty.png"),
     fullPage: true,
   });
 
-  await page.getByRole("button", { name: /See the big picture/ }).click();
+  await page.getByRole("button", { name: "Summarize", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "Your question" }),
   ).toHaveValue(/Summarize the key ideas/);
@@ -191,7 +194,7 @@ test("keeps working in memory when browser session storage is unavailable", asyn
   const backend = await mockBackend(page);
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Good questions. Grounded answers." }),
+    page.getByRole("heading", { name: "Ask your document" }),
   ).toBeVisible();
   await attachPdf(page, await pdfFixture(testInfo));
   await ask(page, "Summarize without browser storage");
@@ -208,7 +211,7 @@ test("keeps working in memory when browser session storage is unavailable", asyn
   await page.reload();
 
   await expect(
-    page.getByRole("heading", { name: "Good questions. Grounded answers." }),
+    page.getByRole("heading", { name: "Ask your document" }),
   ).toBeVisible();
   await expect(page.getByRole("article")).toHaveCount(0);
   await expect(
@@ -432,7 +435,9 @@ test("restores history after reload and requires reattaching the original PDF", 
     page.getByRole("region", { name: "Document answer", exact: true }),
   ).toContainText("customer discovery");
   await expect(
-    page.getByRole("button", { name: "Reattach document", exact: true }),
+    page
+      .getByRole("main")
+      .getByRole("button", { name: "Browse files", exact: true }),
   ).toBeVisible();
   await page
     .getByRole("textbox", { name: "Your question" })
@@ -454,7 +459,7 @@ test("restores history after reload and requires reattaching the original PDF", 
   ]);
 });
 
-test("provides accessible mobile drawers with trapped focus and Escape dismissal", async ({
+test("provides accessible mobile navigation and document dialogs", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -484,7 +489,7 @@ test("provides accessible mobile drawers with trapped focus and Escape dismissal
   });
   await expect(navigation).toHaveAttribute("aria-modal", "true");
   await expect(
-    navigation.getByRole("button", { name: "New conversation", exact: true }),
+    navigation.getByRole("button", { name: "Close navigation", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(
@@ -492,13 +497,13 @@ test("provides accessible mobile drawers with trapped focus and Escape dismissal
   ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(
-    navigation.getByRole("button", { name: "New conversation", exact: true }),
+    navigation.getByRole("button", { name: "Close navigation", exact: true }),
   ).toBeFocused();
   await page
     .getByRole("textbox", { name: "Your question" })
     .evaluate((element) => element.focus());
   await expect(
-    navigation.getByRole("button", { name: "New conversation", exact: true }),
+    navigation.getByRole("button", { name: "Close navigation", exact: true }),
   ).toBeFocused();
   await page.screenshot({
     path: testInfo.outputPath("mobile-navigation.png"),
@@ -512,60 +517,59 @@ test("provides accessible mobile drawers with trapped focus and Escape dismissal
   await expect(
     page.getByRole("button", { name: "New conversation", exact: true }),
   ).toBeInViewport();
-  await page
-    .getByRole("navigation", { name: "Views" })
-    .getByRole("button", { name: "Conversation", exact: true })
+  await navigation
+    .getByRole("button", { name: "New conversation", exact: true })
     .click();
+  await expect(navigation).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "New conversation", exact: true }),
   ).not.toBeInViewport();
 
-  const sourcesTrigger = page.getByRole("button", {
-    name: "Show sources",
+  const documentTrigger = page.getByRole("button", {
+    name: "Show document",
     exact: true,
   });
-  await sourcesTrigger.click();
-  const sources = page.getByRole("dialog", {
-    name: "Sources and context",
+  await documentTrigger.click();
+  const documentDialog = page.getByRole("dialog", {
+    name: "Document",
     exact: true,
   });
-  await expect(sources).toHaveAttribute("aria-modal", "true");
-  await expect(
-    sources.getByRole("button", { name: "Close sources panel", exact: true }),
-  ).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await expect(
-    sources.getByRole("button", { name: "How it works", exact: true }),
-  ).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(
-    sources.getByRole("button", { name: "Close sources panel", exact: true }),
-  ).toBeFocused();
+  await expect(documentDialog).toBeVisible();
+  expect(
+    await documentDialog.evaluate(
+      (element) => element instanceof HTMLDialogElement && element.open,
+    ),
+  ).toBe(true);
+  const closeDocument = documentDialog.getByRole("button", {
+    name: "Close document",
+    exact: true,
+  });
+  await expect(closeDocument).toBeFocused();
   await page
     .getByRole("textbox", { name: "Your question" })
     .evaluate((element) => element.focus());
+  await expect(closeDocument).toBeFocused();
   await expect(
-    sources.getByRole("button", { name: "Close sources panel", exact: true }),
-  ).toBeFocused();
-  await expect(
-    page.getByRole("heading", { name: "Sources & context" }),
+    documentDialog.getByRole("heading", { name: "Document", exact: true }),
   ).toBeInViewport();
   await expect(
-    page.getByRole("button", { name: "Add a document", exact: true }),
+    documentDialog.getByRole("button", { name: "Add a document", exact: true }),
   ).toBeInViewport();
   await page.screenshot({
-    path: testInfo.outputPath("mobile-sources.png"),
+    path: testInfo.outputPath("mobile-document.png"),
     fullPage: true,
   });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
   await page.keyboard.press("Escape");
-  await expect(sources).toHaveCount(0);
-  await expect(sourcesTrigger).toBeFocused();
+  await expect(documentDialog).toBeHidden();
+  await expect(documentTrigger).toBeFocused();
 
-  await sourcesTrigger.click();
-  await page
-    .getByRole("button", { name: "Close sources panel", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Sources & context" }),
-  ).not.toBeInViewport();
+  await documentTrigger.click();
+  await closeDocument.click();
+  await expect(documentDialog).toBeHidden();
+  await expect(documentTrigger).toBeFocused();
 });
