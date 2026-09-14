@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+build/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+.env*
+!.env.example
+server/uploads/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -1,0 +1,45 @@
+{
+  "name": "document-ai",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "start": "next start",
+    "build": "next build",
+    "lint": "eslint .",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "server": "npm --prefix server start",
+    "format:check": "prettier --check src tests *.ts *.mts *.mjs package.json tsconfig.json README.md"
+  },
+  "dependencies": {
+    "lucide-react": "1.45.0",
+    "next": "16.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/postcss": "4.3.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.3.5",
+    "jsdom": "^26.1.0",
+    "prettier": "3.9.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
