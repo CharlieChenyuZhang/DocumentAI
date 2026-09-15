@@ -7,7 +7,24 @@ export type Citation = {
   text?: string;
 };
 export type WebSource = { id?: string; title: string; url: string };
-export type Turn = {
+export type SearchMode = "documents" | "hybrid";
+export type WebSearchStatus =
+  | "disabled"
+  | "pending"
+  | "searching"
+  | "complete"
+  | "empty"
+  | "failed"
+  | "skipped";
+export type WebSearchReason =
+  "not_needed" | "no_public_query" | "planning_unavailable";
+export type SearchMetadata = {
+  searchMode?: SearchMode;
+  webSearchStatus?: WebSearchStatus;
+  webSearchReason?: WebSearchReason;
+  warnings?: string[];
+};
+export type Turn = SearchMetadata & {
   id: string;
   messageId?: string;
   question: string;
@@ -41,6 +58,58 @@ export function formatSize(bytes: number): string {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+const WEB_SEARCH_STATUSES = [
+  "disabled",
+  "pending",
+  "searching",
+  "complete",
+  "empty",
+  "failed",
+  "skipped",
+] as const;
+const WEB_SEARCH_REASONS = [
+  "not_needed",
+  "no_public_query",
+  "planning_unavailable",
+] as const;
+const PUBLIC_WARNINGS = new Set([
+  "Search planning was unavailable. The answer uses selected documents only.",
+  "No relevant passages were found in the selected documents.",
+  "Web search was unavailable. No web results were used.",
+  "The answer could not be completed. Please retry.",
+]);
+
+/** Keep public execution state, never arbitrary tool/provider diagnostics. */
+export function searchMetadataFromState(
+  state: Record<string, unknown>,
+): SearchMetadata {
+  return {
+    searchMode:
+      state.search_mode === "hybrid" || state.search_mode === "documents"
+        ? state.search_mode
+        : undefined,
+    webSearchStatus: WEB_SEARCH_STATUSES.includes(
+      state.web_search_status as WebSearchStatus,
+    )
+      ? (state.web_search_status as WebSearchStatus)
+      : undefined,
+    webSearchReason: WEB_SEARCH_REASONS.includes(
+      state.web_search_reason as WebSearchReason,
+    )
+      ? (state.web_search_reason as WebSearchReason)
+      : undefined,
+    warnings: Array.isArray(state.warnings)
+      ? [
+          ...new Set(
+            state.warnings.filter(
+              (value): value is string =>
+                typeof value === "string" && PUBLIC_WARNINGS.has(value),
+            ),
+          ),
+        ]
+      : [],
+  };
 }
 export function citationsFromState(value: unknown): Citation[] {
   if (!Array.isArray(value)) return [];
@@ -122,6 +191,12 @@ export function restoreConversations(raw: string | null): Conversation[] {
             error: typeof turn.error === "string" ? turn.error : undefined,
             citations: citationsFromState(turn.citations),
             webSources: webSourcesFromState(turn.webSources),
+            ...searchMetadataFromState({
+              search_mode: turn.searchMode,
+              web_search_status: turn.webSearchStatus,
+              web_search_reason: turn.webSearchReason,
+              warnings: turn.warnings,
+            }),
           })),
       }));
   } catch {
@@ -149,13 +224,22 @@ export function conversationMarkdown(conversation: Conversation): string {
     ...conversation.turns.flatMap((turn) => [
       `## ${turn.question}`,
       `Documents: ${turn.documentName}`,
+      turn.searchMode
+        ? `Search mode: ${turn.searchMode === "hybrid" ? "Documents + web" : "Documents"}`
+        : "",
+      turn.webSearchStatus
+        ? `Web search: ${turn.webSearchStatus}${turn.webSearchReason ? ` (${turn.webSearchReason.replaceAll("_", " ")})` : ""}`
+        : "",
       turn.answer || `Response ${turn.status}.`,
       turn.error || "",
+      ...(turn.warnings ?? []),
       ...(turn.citations ?? []).map(
-        (source) => `- ${source.document_name}, page ${source.page}`,
+        (source) =>
+          `- ${source.id ? `[${source.id}] ` : ""}${source.document_name}, page ${source.page}`,
       ),
       ...(turn.webSources ?? []).map(
-        (source) => `- [${source.title}](${source.url})`,
+        (source) =>
+          `- ${source.id ? `[${source.id}] ` : ""}[${source.title}](${source.url})`,
       ),
     ]),
   ]

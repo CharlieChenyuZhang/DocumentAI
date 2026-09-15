@@ -8,7 +8,7 @@ A document research workspace built with Next.js, React, TypeScript, Tailwind CS
 
 1. Next.js Route Handlers establish the user identity, accept uploads, and protect the agent connection.
 2. LangChain loads and splits each PDF once. OpenAI embeddings are stored in the explicitly selected vector backend: a persistent SQLite index for localhost, or Pinecone for cloud retrieval. Both scope vectors to the document owner. A SQLite catalog records document ownership and ingestion status.
-3. A custom Google ADK agent plans whether external information is needed, retrieves passages from the selected owned documents, optionally calls the MCP web-search tool, and streams one answer using `gpt-5.6-sol` through LiteLLM.
+3. A custom Google ADK agent retrieves passages from the selected owned documents and, when web search is enabled, plans a relevant public query from the question and calls the MCP web-search tool. It streams one answer using `gpt-5.6-sol` through LiteLLM, distinguishing document and web evidence.
 4. AG-UI carries text, tool events, and explicit progress/source state through the Next.js CopilotRuntime. CopilotKit headless hooks update the existing custom UI.
 
 The agent uses persistent ADK sessions in SQLite. It accepts the latest user question from the browser and loads its own conversation history. Client-supplied system messages, tool results, user IDs, and retrieved evidence are not trusted.
@@ -86,6 +86,8 @@ Every document read, retrieval, and deletion checks the server-owned SQLite cata
 - Streaming Markdown answers, source labels, explicit retrieval/search progress, copy, read aloud, editable voice dictation, retry, and Markdown export.
 - Voice input records up to two minutes with the browser microphone. Click stop to send the recording to OpenAI through authenticated `/api/transcriptions` and the private agent service. Review or edit the transcript before sending your question. Recordings are limited to 8 MiB, processed in memory, and not stored by Document AI. Editing the draft, changing conversations, or cancelling stops capture and discards late results.
 - Optional web search uses an actual stdio MCP server backed by SerpAPI. The planner receives the user question and document count, not retrieved document contents. Search queries still leave the application when web search is enabled.
+- Enabling web search requests relevant public context, including for summaries that name a public topic. Generic requests such as “summarize these documents” can be skipped when no public query is available; the answer explains how to add a topic. Empty results and unavailable web services are reported explicitly while document answers continue.
+- Each answer preserves its own search mode and execution outcome across history reloads and exports. The UI labels retrieved document plus web evidence as “Hybrid search · Documents + web”, separates document and web source counts, and expands web sources by default. This label describes the two evidence sources, not sparse/dense vector ranking.
 - Stop aborts the active browser stream and its corresponding upstream agent execution. A provider request or blocking vector operation already submitted may finish, but the canceled run must not continue to synthesis or append a late answer.
 - Clearing local chat history does not delete uploaded PDFs. Document deletion is a separate library action.
 

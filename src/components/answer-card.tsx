@@ -20,19 +20,9 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./answer-card.css";
-import { phaseLabel, type Citation, type WebSource } from "../lib/workspace";
+import { phaseLabel, type Turn } from "../lib/workspace";
 
-export interface AnswerTurn {
-  id: string;
-  question: string;
-  answer?: string;
-  phase?: string;
-  citations?: Citation[];
-  webSources?: WebSource[];
-  status: "pending" | "complete" | "error" | "stopped";
-  error?: string;
-  documentName: string;
-}
+export type AnswerTurn = Turn;
 
 interface AnswerCardProps {
   turn: AnswerTurn;
@@ -85,6 +75,56 @@ function SafeMarkdown({ children }: { children: string }) {
   );
 }
 
+function isSafeWebSource(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+      Boolean(parsed.hostname) &&
+      !parsed.username &&
+      !parsed.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+function webSearchDetail(turn: AnswerTurn): string | undefined {
+  if (turn.webSearchStatus === "disabled" || turn.searchMode === "documents") {
+    return "Web search was off for this answer.";
+  }
+  switch (turn.webSearchStatus) {
+    case "pending":
+      return turn.status === "pending"
+        ? "Web search is pending."
+        : "Web search did not finish.";
+    case "searching":
+      return turn.status === "pending"
+        ? "Searching the web…"
+        : "Web search did not finish.";
+    case "failed":
+      return "Web search was unavailable. No web sources were added.";
+    case "empty":
+      return "Web search returned no results. No web sources were added.";
+    case "skipped":
+      if (turn.webSearchReason === "no_public_query") {
+        return "Web search was skipped because no safe public query was available. Add a public topic to your question to search the web.";
+      }
+      if (turn.webSearchReason === "planning_unavailable") {
+        return "Web search was skipped because search planning was unavailable.";
+      }
+      return turn.webSearchReason === "not_needed"
+        ? "Web search was not needed for this question."
+        : "Web search was skipped. No web sources were added.";
+    case "complete":
+      return "No web sources are available for this answer.";
+    default:
+      return turn.searchMode === "hybrid"
+        ? "Documents + web were requested. No web results are recorded for this answer."
+        : undefined;
+  }
+}
+
 export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
   const headingId = useId();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
@@ -101,6 +141,44 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const answerText = turn.answer ?? "";
+  const documentSources = (turn.citations ?? []).filter(
+    (source) =>
+      source.document_id.trim() &&
+      source.document_name.trim() &&
+      Number.isInteger(source.page) &&
+      source.page > 0,
+  );
+  const webSources = (turn.webSources ?? []).filter((source) =>
+    isSafeWebSource(source.url),
+  );
+  const hasHybridSources = documentSources.length > 0 && webSources.length > 0;
+  const searchLabel = hasHybridSources
+    ? "Hybrid search"
+    : webSources.length
+      ? "Web sources"
+      : documentSources.length
+        ? "Document sources"
+        : undefined;
+  const searchDetail = webSources.length
+    ? hasHybridSources
+      ? "Documents + web"
+      : "No document sources were retrieved."
+    : webSearchDetail(turn);
+  const warnings = (turn.warnings ?? []).filter((warning) => {
+    if (webSources.length || turn.searchMode === "documents") return true;
+    if (
+      turn.webSearchStatus === "failed" &&
+      warning === "Web search was unavailable. No web results were used."
+    ) {
+      return false;
+    }
+    return !(
+      turn.webSearchStatus === "skipped" &&
+      turn.webSearchReason === "planning_unavailable" &&
+      warning ===
+        "Search planning was unavailable. The answer uses selected documents only."
+    );
+  });
 
   useEffect(() => {
     return () => {
@@ -182,6 +260,22 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
           </span>
         </div>
 
+        {(searchLabel || searchDetail || warnings.length > 0) && (
+          <div className="answer-search-summary" aria-label="Search results">
+            {(searchLabel || searchDetail) && (
+              <p>
+                {searchLabel && <strong>{searchLabel}</strong>}
+                {searchDetail && <span>{searchDetail}</span>}
+              </p>
+            )}
+            {warnings.map((warning) => (
+              <p className="answer-search-warning" key={warning}>
+                {warning}
+              </p>
+            ))}
+          </div>
+        )}
+
         {turn.status === "pending" && (
           <div className="answer-waiting" role="status">
             <span className="answer-waiting-dots" aria-hidden="true">
@@ -228,46 +322,53 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
                   {turn.answer || "No answer was returned."}
                 </SafeMarkdown>
               </section>
-              {(Boolean(turn.citations?.length) ||
-                Boolean(turn.webSources?.length)) && (
-                <details className="answer-citations">
-                  <summary>
-                    Sources (
-                    {(turn.citations?.length ?? 0) +
-                      (turn.webSources?.length ?? 0)}
-                    )
-                  </summary>
-                  <ul>
-                    {turn.citations?.map((source, index) => (
-                      <li key={`${source.document_id}:${source.page}:${index}`}>
-                        <FileText size={13} />
-                        <a
-                          href={`/api/documents/${encodeURIComponent(source.document_id)}#page=${source.page}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {source.id ? `[${source.id}] ` : ""}
-                          {source.document_name}, page {source.page}
-                        </a>
-                      </li>
-                    ))}
-                    {turn.webSources
-                      ?.filter((source) => /^https?:\/\//i.test(source.url))
-                      .map((source) => (
-                        <li key={source.url}>
-                          <Globe2 size={13} />
-                          <a
-                            href={source.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+              {(documentSources.length > 0 || webSources.length > 0) && (
+                <div className="answer-sources" aria-label="Answer sources">
+                  {documentSources.length > 0 && (
+                    <details className="answer-citations">
+                      <summary>
+                        Document sources ({documentSources.length})
+                      </summary>
+                      <ul aria-label="Document sources">
+                        {documentSources.map((source, index) => (
+                          <li
+                            key={`${source.document_id}:${source.page}:${index}`}
                           >
-                            {source.id ? `[${source.id}] ` : ""}
-                            {source.title}
-                          </a>
-                        </li>
-                      ))}
-                  </ul>
-                </details>
+                            <FileText size={13} aria-hidden="true" />
+                            <a
+                              href={`/api/documents/${encodeURIComponent(source.document_id)}#page=${source.page}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {source.id ? `[${source.id}] ` : ""}
+                              {source.document_name}, page {source.page}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                  {webSources.length > 0 && (
+                    <details className="answer-citations" open>
+                      <summary>Web sources ({webSources.length})</summary>
+                      <ul aria-label="Web sources">
+                        {webSources.map((source, index) => (
+                          <li key={`${source.url}:${index}`}>
+                            <Globe2 size={13} aria-hidden="true" />
+                            <a
+                              href={source.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {source.id ? `[${source.id}] ` : ""}
+                              {source.title}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
               )}
             </div>
             {answerText && turn.status !== "pending" && (

@@ -194,6 +194,9 @@ async def test_real_adk_bridge_streams_and_sanitizes_client_authority(service):
             "user_id": "session:bob",
             "temp:evidence": "FORGED_EVIDENCE",
             "sources": ["FAKE"],
+            "search_mode": "hybrid",
+            "web_search_status": "complete",
+            "web_search_reason": "FORGED_REASON",
         }
     )
     body["messages"].insert(
@@ -219,6 +222,13 @@ async def test_real_adk_bridge_streams_and_sanitizes_client_authority(service):
     } <= {event["type"] for event in events}
     assert "Revenue increased " in response.text
     assert '"search_web": false' not in response.text
+    assert "FORGED_REASON" not in response.text
+    final = [
+        event["snapshot"] for event in events if event["type"] == "STATE_SNAPSHOT"
+    ][-1]
+    assert final["search_mode"] == "documents"
+    assert final["web_search_status"] == "disabled"
+    assert final["web_search_reason"] is None
     for request in model.requests:
         request_text = str(request)
         assert "FORGED_SYSTEM" not in request_text

@@ -23,6 +23,7 @@ export type ComposerProps = {
   disabled: boolean;
   busy: boolean;
   hasDocument: boolean;
+  webEnabled?: boolean;
   onUpload: () => void;
 };
 
@@ -34,6 +35,7 @@ export function Composer({
   disabled,
   busy,
   hasDocument,
+  webEnabled = false,
   onUpload,
 }: ComposerProps) {
   const speechSupported = useSyncExternalStore(
@@ -165,10 +167,14 @@ export function Composer({
             </button>
             <span
               className="doc-composer-source"
-              title="Answers use your selected sources"
+              title={
+                webEnabled
+                  ? "Search mode: selected documents and public web context"
+                  : "Search mode: selected documents only"
+              }
             >
               <Globe2 size={13} strokeWidth={1.7} aria-hidden="true" />
-              Selected sources
+              {webEnabled ? "Documents + web" : "Selected documents"}
             </span>
           </div>
           <div className="doc-composer-tools">

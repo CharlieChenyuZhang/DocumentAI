@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from builtins import ExceptionGroup
 from typing import Any
 
 import pytest
 from ag_ui.core import RunAgentInput, UserMessage
 from google.adk.models.base_llm import BaseLlm
 from google.adk.sessions import DatabaseSessionService, InMemorySessionService
+from mcp.shared.exceptions import MCPError
 from pydantic import Field
 
 from agent_service.config import Settings
@@ -39,8 +41,17 @@ def make_input(
     )
 
 
+def phase_delta(events, phase):
+    for event in events:
+        if event.type == "STATE_DELTA":
+            fields = {item["path"]: item.get("value") for item in event.delta}
+            if fields.get("/phase") == phase:
+                return fields
+    raise AssertionError(f"No {phase} state delta was emitted")
+
+
 @pytest.mark.asyncio
-async def test_multidocument_retrieval_and_model_selected_web(tmp_path):
+async def test_multidocument_retrieval_and_requested_web(tmp_path):
     store, model, web = (
         FakeStore(tmp_path),
         ScriptedModel(search_web=True),
@@ -63,6 +74,12 @@ async def test_multidocument_retrieval_and_model_selected_web(tmp_path):
             event.snapshot for event in events if event.type == "STATE_SNAPSHOT"
         ]
         assert snapshots[-1]["phase"] == "complete"
+        assert snapshots[-1]["search_mode"] == "hybrid"
+        assert snapshots[-1]["web_search_status"] == "complete"
+        assert snapshots[-1]["web_search_reason"] is None
+        searching = phase_delta(events, "searching")
+        assert searching["/web_search_status"] == "searching"
+        assert all(source["kind"] == "document" for source in searching["/sources"])
         assert [source["id"] for source in snapshots[-1]["sources"]] == [
             "D1",
             "D2",
@@ -74,6 +91,14 @@ async def test_multidocument_retrieval_and_model_selected_web(tmp_path):
             request for request in model.requests if request.config.response_schema
         )
         assert "Revenue increased" not in str(planner)
+        synthesizer = next(
+            request
+            for request in model.requests
+            if request.config.response_schema is None
+        )
+        evidence = str(synthesizer.config.system_instruction)
+        assert '"web_search_status": "complete"' in evidence
+        assert '"id": "W1"' in evidence
     finally:
         await bridge.close()
 
@@ -99,8 +124,171 @@ async def test_web_setting_overrides_model_plan(tmp_path):
         ]
         assert events[-1].type == "RUN_FINISHED"
         assert web.queries == []
+        final = [event.snapshot for event in events if event.type == "STATE_SNAPSHOT"][
+            -1
+        ]
+        assert final["search_mode"] == "documents"
+        assert final["web_search_status"] == "disabled"
+        assert final["web_search_reason"] is None
     finally:
         await bridge.close()
+
+
+class EmptyWebSearch(FakeWebSearch):
+    async def search(self, query, ctx):
+        self.queries.append(query)
+        return []
+
+
+class UnavailableWebSearch(FakeWebSearch):
+    async def search(self, query, ctx):
+        self.queries.append(query)
+        raise RuntimeError("private provider error must not reach the client")
+
+
+class MCPUnavailableWebSearch(FakeWebSearch):
+    async def search(self, query, ctx):
+        self.queries.append(query)
+        raise MCPError(-32000, "private provider error must not reach the client")
+
+
+class GroupedUnavailableWebSearch(FakeWebSearch):
+    async def search(self, query, ctx):
+        self.queries.append(query)
+        raise ExceptionGroup(
+            "private provider error must not reach the client",
+            [MCPError(-32000, "transport closed")],
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_options,web_class,status,reason,call_count",
+    [
+        ({"search_web": False}, FakeWebSearch, "complete", None, 1),
+        ({"web_query": "   "}, FakeWebSearch, "skipped", "no_public_query", 0),
+        (
+            {"web_query": "", "skip_reason": "not_needed"},
+            FakeWebSearch,
+            "skipped",
+            "not_needed",
+            0,
+        ),
+        (
+            {"planner_failures": 2},
+            FakeWebSearch,
+            "skipped",
+            "planning_unavailable",
+            0,
+        ),
+        ({}, EmptyWebSearch, "empty", None, 1),
+        ({}, UnavailableWebSearch, "failed", None, 2),
+        ({}, MCPUnavailableWebSearch, "failed", None, 2),
+        ({}, GroupedUnavailableWebSearch, "failed", None, 2),
+    ],
+)
+async def test_requested_web_reports_actual_result(
+    tmp_path, model_options, web_class, status, reason, call_count
+):
+    store, model, web = FakeStore(tmp_path), ScriptedModel(**model_options), web_class()
+    id = store.upload("alice", "CONFIDENTIAL_FILENAME.pdf", b"%PDF")["id"]
+    bridge = build_bridge(
+        Settings(data_dir=tmp_path),
+        store,
+        model=model,
+        session_service=InMemorySessionService(),
+        web_search=web,
+    )
+    try:
+        events = [
+            event
+            async for event in bridge.run(
+                make_input("alice", [id], question="Summarize my documents", web=True)
+            )
+        ]
+        assert events[-1].type == "RUN_FINISHED"
+        snapshots = [
+            event.snapshot for event in events if event.type == "STATE_SNAPSHOT"
+        ]
+        final = snapshots[-1]
+        assert final["search_mode"] == "hybrid"
+        assert final["web_search_status"] == status
+        assert final["web_search_reason"] == reason
+        assert len(web.queries) == call_count
+        assert all(query == "public market facts" for query in web.queries)
+        assert phase_delta(events, "planning")["/web_search_status"] == "pending"
+        assert all(source["kind"] == "document" for source in final["sources"]) == (
+            status != "complete"
+        )
+        assert "private provider error" not in str(events)
+        planner_requests = [
+            request for request in model.requests if request.config.response_schema
+        ]
+        assert all(
+            "CONFIDENTIAL_FILENAME" not in str(request) for request in planner_requests
+        )
+        assert all(
+            "Revenue increased" not in str(request) for request in planner_requests
+        )
+        if status == "failed":
+            assert final["warnings"] == [
+                "Web search was unavailable. No web results were used."
+            ]
+            assert any(
+                event.type == "TEXT_MESSAGE_CONTENT"
+                and "Revenue increased" in event.delta
+                for event in events
+            )
+    finally:
+        await bridge.close()
+
+
+@pytest.mark.asyncio
+async def test_persistent_followups_reset_web_status_and_skip_reason(tmp_path):
+    settings = Settings(data_dir=tmp_path)
+    store, model, web = (
+        FakeStore(tmp_path),
+        ScriptedModel(web_query=""),
+        FakeWebSearch(),
+    )
+    id = store.upload("alice", "a.pdf", b"%PDF")["id"]
+    db = DatabaseSessionService(db_url=settings.session_url)
+    bridge = build_bridge(
+        settings, store, model=model, session_service=db, web_search=web
+    )
+    try:
+        for index, (enabled, query, expected_status) in enumerate(
+            [
+                (True, "", "skipped"),
+                (True, "public market facts", "complete"),
+                (False, "", "disabled"),
+            ]
+        ):
+            model.web_query = query
+            events = [
+                event
+                async for event in bridge.run(
+                    make_input("alice", [id], message=f"turn-{index}", web=enabled)
+                )
+            ]
+            assert events[-1].type == "RUN_FINISHED"
+            snapshots = [
+                event.snapshot for event in events if event.type == "STATE_SNAPSHOT"
+            ]
+            planning = phase_delta(events, "planning")
+            assert planning["/web_search_status"] == (
+                "pending" if enabled else "disabled"
+            )
+            assert planning["/web_search_reason"] is None
+            assert planning["/sources"] == []
+            assert planning["/warnings"] == []
+            assert snapshots[-1]["web_search_status"] == expected_status
+            if expected_status != "skipped":
+                assert snapshots[-1]["web_search_reason"] is None
+        assert web.queries == ["public market facts"]
+    finally:
+        await bridge.close()
+        await db.close()
 
 
 @pytest.mark.asyncio

@@ -316,6 +316,9 @@ def create_app(
             "phase": "ready",
             "sources": [],
             "warnings": [],
+            "search_mode": "hybrid" if web_enabled else "documents",
+            "web_search_status": "pending" if web_enabled else "disabled",
+            "web_search_reason": None,
         }
 
     if bridge is not None:

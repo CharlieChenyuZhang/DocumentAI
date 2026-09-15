@@ -189,3 +189,260 @@ it("shows partial text and source markers while keeping completed-answer actions
     screen.queryByRole("link", { name: "Unsafe source" }),
   ).not.toBeInTheDocument();
 });
+
+const documentSource = {
+  id: "D1",
+  document_id: "doc-1",
+  document_name: "Research report.pdf",
+  page: 2,
+};
+const webSource = {
+  id: "W1",
+  title: "Public research update",
+  url: "https://example.com/research",
+};
+
+describe("answer search provenance", () => {
+  it("identifies actual hybrid results and exposes document and web source counts separately", () => {
+    render(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          searchMode: "hybrid",
+          webSearchStatus: "complete",
+          citations: [documentSource],
+          webSources: [webSource],
+        }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(screen.getByText("Hybrid search")).toBeVisible();
+    expect(screen.getByText("Documents + web")).toBeVisible();
+    expect(screen.getByText("Document sources (1)")).toBeVisible();
+    expect(screen.getByText("Web sources (1)")).toBeVisible();
+    expect(screen.getByRole("list", { name: "Web sources" })).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "[W1] Public research update" }),
+    ).toHaveAttribute("href", webSource.url);
+    const documents = screen
+      .getByText("Document sources (1)")
+      .closest("details");
+    expect(documents).not.toHaveAttribute("open");
+    expect(
+      screen.getByText("Web sources (1)").closest("details"),
+    ).toHaveAttribute("open");
+  });
+
+  it.each([
+    [
+      "failed",
+      undefined,
+      "Web search was unavailable. No web sources were added.",
+    ],
+    [
+      "empty",
+      undefined,
+      "Web search returned no results. No web sources were added.",
+    ],
+    ["skipped", "not_needed", "Web search was not needed for this question."],
+    [
+      "skipped",
+      "no_public_query",
+      "Web search was skipped because no safe public query was available. Add a public topic to your question to search the web.",
+    ],
+    [
+      "skipped",
+      "planning_unavailable",
+      "Web search was skipped because search planning was unavailable.",
+    ],
+  ] as const)(
+    "explains %s web search without claiming a hybrid answer",
+    (status, reason, detail) => {
+      render(
+        <AnswerCard
+          turn={{
+            ...completeTurn,
+            searchMode: "hybrid",
+            webSearchStatus: status,
+            webSearchReason: reason,
+            citations: [documentSource],
+          }}
+          onRetry={vi.fn()}
+          retryDisabled={false}
+        />,
+      );
+      expect(screen.getByText(detail)).toBeVisible();
+      expect(screen.queryByText("Hybrid search")).not.toBeInTheDocument();
+      expect(screen.queryByText("Web sources (0)")).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not count unsafe web URLs or invalid document references", () => {
+    render(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          searchMode: "hybrid",
+          webSearchStatus: "complete",
+          citations: [documentSource, { ...documentSource, page: -1 }],
+          webSources: [
+            { ...webSource, url: "javascript:alert(1)" },
+            { ...webSource, url: "https://" },
+            { ...webSource, url: "https://user:secret@example.com" },
+          ],
+        }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(screen.getByText("Document sources (1)")).toBeVisible();
+    expect(screen.queryByText("Hybrid search")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", { name: "Web sources" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("No web sources are available for this answer."),
+    ).toBeVisible();
+  });
+
+  it("keeps legacy source-only answers honest and uses per-turn mode for new answers", () => {
+    const { rerender } = render(
+      <AnswerCard
+        turn={{ ...completeTurn, citations: [documentSource] }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(screen.getByText("Document sources")).toBeVisible();
+    expect(screen.queryByText(/Web search was/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Hybrid search")).not.toBeInTheDocument();
+    rerender(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          citations: [documentSource],
+          searchMode: "documents",
+          webSearchStatus: "disabled",
+        }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(
+      screen.getByText("Web search was off for this answer."),
+    ).toBeVisible();
+    rerender(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          citations: [documentSource],
+          webSources: [webSource],
+        }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(screen.getByText("Hybrid search")).toBeVisible();
+  });
+
+  it.each([
+    ["pending", "Web search is pending."],
+    ["searching", "Searching the web…"],
+  ] as const)("shows %s search before an answer arrives", (status, detail) => {
+    render(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          answer: "",
+          status: "pending",
+          searchMode: "hybrid",
+          webSearchStatus: status,
+        }}
+        onRetry={vi.fn()}
+        retryDisabled
+      />,
+    );
+    expect(screen.getByText(detail)).toBeVisible();
+    expect(screen.queryByText("Hybrid search")).not.toBeInTheDocument();
+  });
+
+  it("does not leave a stopped answer displaying an ongoing search", () => {
+    render(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          status: "stopped",
+          searchMode: "hybrid",
+          webSearchStatus: "searching",
+        }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(screen.getByText("Web search did not finish.")).toBeVisible();
+    expect(screen.queryByText("Searching the web…")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "failed",
+      undefined,
+      "Web search was unavailable. No web results were used.",
+    ],
+    [
+      "skipped",
+      "planning_unavailable",
+      "Search planning was unavailable. The answer uses selected documents only.",
+    ],
+  ] as const)(
+    "shows one %s explanation while preserving document warnings",
+    (status, reason, warning) => {
+      render(
+        <AnswerCard
+          turn={{
+            ...completeTurn,
+            searchMode: "hybrid",
+            webSearchStatus: status,
+            webSearchReason: reason,
+            warnings: [
+              warning,
+              "No relevant passages were found in the selected documents.",
+            ],
+          }}
+          onRetry={vi.fn()}
+          retryDisabled={false}
+        />,
+      );
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/Web search was (unavailable|skipped)/),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          "No relevant passages were found in the selected documents.",
+        ),
+      ).toBeVisible();
+    },
+  );
+
+  it("shows known service warnings supplied with an answer", () => {
+    render(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          warnings: [
+            "No relevant passages were found in the selected documents.",
+          ],
+        }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "No relevant passages were found in the selected documents.",
+      ),
+    ).toBeVisible();
+  });
+});

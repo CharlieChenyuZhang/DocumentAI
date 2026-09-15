@@ -18,6 +18,8 @@ from agent_service.document_store import DocumentAccessError
 class ScriptedModel(BaseLlm):
     model: str = "offline-test-model"
     search_web: bool = False
+    web_query: str = "public market facts"
+    skip_reason: str = "no_public_query"
     requests: list[Any] = Field(default_factory=list)
     planner_failures: int = 0
     synthesis_failures: int = 0
@@ -30,7 +32,11 @@ class ScriptedModel(BaseLlm):
                 self.planner_failures -= 1
                 raise RuntimeError("Offline planner failure")
             text = json.dumps(
-                {"search_web": self.search_web, "web_query": "public market facts"}
+                {
+                    "search_web": self.search_web,
+                    "web_query": self.web_query,
+                    "skip_reason": self.skip_reason,
+                }
             )
             yield LlmResponse(
                 content=types.Content(role="model", parts=[types.Part(text=text)]),

@@ -40,6 +40,7 @@ import {
   createConversation,
   formatSize,
   restoreConversations,
+  searchMetadataFromState,
   STORAGE_KEY,
   webSourcesFromState,
   type Conversation,
@@ -321,6 +322,7 @@ function DocumentWorkspace({
         .map((message) => message.content)
         .join("\n\n");
       const state = agent.state as Record<string, unknown>;
+      const search = searchMetadataFromState(state);
       updateConversation(run.conversationId, (item) => ({
         ...item,
         turns: item.turns.map((turn) =>
@@ -334,6 +336,9 @@ function DocumentWorkspace({
                 webSources: webSourcesFromState(
                   state.sources ?? state.web_sources,
                 ),
+                ...search,
+                searchMode: search.searchMode ?? turn.searchMode,
+                webSearchStatus: search.webSearchStatus ?? turn.webSearchStatus,
               }
             : turn,
         ),
@@ -534,6 +539,9 @@ function DocumentWorkspace({
       status: "pending",
       answer: "",
       phase: "planning",
+      searchMode: webEnabled ? "hybrid" : "documents",
+      webSearchStatus: webEnabled ? "pending" : "disabled",
+      warnings: [],
     };
     // Only the latest turn can be retried because the server retains conversation history.
     updateConversation(conversation.id, (item) => ({
@@ -552,6 +560,10 @@ function DocumentWorkspace({
       web_enabled: webEnabled,
       phase: "planning",
       sources: [],
+      search_mode: webEnabled ? "hybrid" : "documents",
+      web_search_status: webEnabled ? "pending" : "disabled",
+      web_search_reason: null,
+      warnings: [],
     });
     const run: ActiveRun = {
       conversationId: conversation.id,
@@ -966,7 +978,7 @@ function DocumentWorkspace({
                 {readyDocuments.length === 1 ? "document" : "documents"}{" "}
                 selected
               </button>
-              <label>
+              <label title="Search public topics from your question and combine relevant web results with your documents.">
                 <input
                   type="checkbox"
                   checked={webEnabled}
@@ -987,6 +999,7 @@ function DocumentWorkspace({
               disabled={phase === "uploading" || !isReady || loadingDocuments}
               busy={phase === "answering"}
               hasDocument={readyDocuments.length > 0}
+              webEnabled={webEnabled}
               onUpload={chooseFile}
             />
             {!isReady && (

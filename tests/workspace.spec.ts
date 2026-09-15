@@ -41,10 +41,18 @@ async function ask(page: Page, question: string) {
 }
 function events(
   input: RunInput,
-  options: { error?: boolean; text?: string } = {},
+  options: {
+    error?: boolean;
+    text?: string;
+    webStatus?: "complete" | "empty" | "failed" | "skipped";
+    webReason?: "no_public_query" | "not_needed" | "planning_unavailable";
+  } = {},
 ) {
   const messageId = `answer-${input.runId}`;
   const selected = input.state.document_ids;
+  const webStatus = input.state.web_enabled
+    ? (options.webStatus ?? "complete")
+    : "disabled";
   return [
     { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
     {
@@ -52,6 +60,11 @@ function events(
       snapshot: {
         ...input.state,
         phase: "retrieving",
+        search_mode: input.state.web_enabled ? "hybrid" : "documents",
+        web_search_status: input.state.web_enabled ? "pending" : "disabled",
+        web_search_reason: null,
+        warnings: [],
+        sources: [],
         citations: [],
         web_sources: [],
       },
@@ -83,6 +96,16 @@ function events(
             snapshot: {
               ...input.state,
               phase: "generating",
+              search_mode: input.state.web_enabled ? "hybrid" : "documents",
+              web_search_status: webStatus,
+              web_search_reason: options.webReason ?? null,
+              warnings:
+                webStatus === "failed"
+                  ? [
+                      "Web search was unavailable. No web results were used.",
+                      "Private provider debug must stay hidden",
+                    ]
+                  : [],
               sources: [
                 ...selected.map((id) => ({
                   kind: "document",
@@ -90,7 +113,7 @@ function events(
                   document_name: id,
                   page: 1,
                 })),
-                ...(input.state.web_enabled
+                ...(webStatus === "complete"
                   ? [
                       {
                         kind: "web",
@@ -127,7 +150,7 @@ function events(
 async function fulfillRun(
   route: Route,
   input: RunInput,
-  options?: { error?: boolean; text?: string },
+  options?: Parameters<typeof events>[1],
 ) {
   await route.fulfill({
     status: 200,
@@ -333,7 +356,14 @@ test("retrieves multiple persistent documents, renders AG-UI answer and citation
   await expect(response).toContainText("customer discovery");
   await expect(page.getByRole("button", { name: "Copy answer" })).toBeVisible();
   await expect(response.getByRole("list")).toHaveCSS("list-style-type", "disc");
-  await page.getByText("Sources (3)", { exact: true }).click();
+  await expect(page.getByText("Hybrid search", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Web sources (1)", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Research source" }),
+  ).toBeVisible();
+  await page.getByText("Document sources (2)", { exact: true }).click();
   await expect(
     page.getByText("first.pdf, page 1", { exact: true }),
   ).toBeVisible();
@@ -358,6 +388,8 @@ test("retrieves multiple persistent documents, renders AG-UI answer and citation
   const markdown = await readFile((await download.path())!, "utf8");
   expect(markdown).toContain(answer);
   expect(markdown).toContain("Documents: first.pdf, second.pdf");
+  expect(markdown).toContain("Search mode: Documents + web");
+  expect(markdown).toContain("Web search: complete");
   await ask(page, "Another detail");
   await expect(page.getByRole("button", { name: "Copy answer" })).toHaveCount(
     2,
@@ -378,13 +410,82 @@ test("persists selections and history for the same user without re-uploading", a
   await expect(
     page.getByRole("region", { name: "Answer", exact: true }),
   ).toContainText("customer discovery");
+  await expect(page.getByText("Hybrid search", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Research source" }),
+  ).toBeVisible();
+  await page.getByRole("checkbox", { name: "Include web search" }).uncheck();
   await ask(page, "Continue the discussion");
   await expect(page.getByRole("button", { name: "Copy answer" })).toHaveCount(
     2,
   );
   expect(backend.uploads).toHaveLength(1);
   expect(backend.runs[1].threadId).toBe(backend.runs[0].threadId);
+  await expect(page.getByText("Hybrid search", { exact: true })).toHaveCount(1);
+  await expect(
+    page.getByText("Web search was off for this answer."),
+  ).toBeVisible();
 });
+
+for (const outcome of [
+  {
+    status: "failed",
+    reason: undefined,
+    detail: "Web search was unavailable. No web sources were added.",
+  },
+  {
+    status: "empty",
+    reason: undefined,
+    detail: "Web search returned no results. No web sources were added.",
+  },
+  {
+    status: "skipped",
+    reason: "no_public_query",
+    detail: "Add a public topic to your question to search the web.",
+  },
+] as const) {
+  test(`records a ${outcome.status} web search honestly with the toggle enabled`, async ({
+    page,
+  }) => {
+    const backend = await mockBackend(page, {
+      onRun: (route, input) =>
+        fulfillRun(route, input, {
+          text: "The document describes a useful finding.",
+          webStatus: outcome.status,
+          webReason: outcome.reason,
+        }),
+    });
+    await page.goto("/");
+    await page.getByTestId("pdf-input").setInputFiles(pdf());
+    await ask(page, "Summarize the selected document");
+    await expect(
+      page.getByRole("button", { name: "Copy answer" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("checkbox", { name: "Include web search" }),
+    ).toBeChecked();
+    await expect(
+      page.getByText(outcome.detail, { exact: false }),
+    ).toBeVisible();
+    await expect(page.getByText("Hybrid search", { exact: true })).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByText("Web sources (1)", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("Private provider debug must stay hidden"),
+    ).toHaveCount(0);
+    expect(backend.runs[0].state.web_enabled).toBe(true);
+    await page.reload();
+    await expect(
+      page.getByText(outcome.detail, { exact: false }),
+    ).toBeVisible();
+    await expect(page.getByText("Hybrid search", { exact: true })).toHaveCount(
+      0,
+    );
+  });
+}
 
 test("keeps document selection and thread IDs separate between conversations", async ({
   page,
@@ -744,7 +845,9 @@ for (const webSearch of [false, null]) {
     expect(backend.runs[0].state.document_ids).toEqual([
       "customer-discovery.pdf",
     ]);
-    await expect(page.getByText("Sources (1)", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Document sources (1)", { exact: true }),
+    ).toBeVisible();
   });
 }
 

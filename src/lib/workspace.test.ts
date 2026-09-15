@@ -2,11 +2,90 @@ import { describe, expect, it } from "vitest";
 import {
   citationsFromState,
   conversationMessages,
+  conversationMarkdown,
   restoreConversations,
+  searchMetadataFromState,
   webSourcesFromState,
 } from "./workspace";
 
 describe("safe conversation snapshots", () => {
+  it("keeps validated execution state and drops provider diagnostics", () => {
+    expect(
+      searchMetadataFromState({
+        search_mode: "hybrid",
+        web_search_status: "skipped",
+        web_search_reason: "no_public_query",
+        warnings: [
+          "Web search was unavailable. No web results were used.",
+          "private diagnostic",
+          { token: "private" },
+        ],
+      }),
+    ).toEqual({
+      searchMode: "hybrid",
+      webSearchStatus: "skipped",
+      webSearchReason: "no_public_query",
+      warnings: ["Web search was unavailable. No web results were used."],
+    });
+    expect(
+      searchMetadataFromState({
+        search_mode: "forged",
+        web_search_status: "private",
+        web_search_reason: "private",
+      }),
+    ).toEqual({
+      searchMode: undefined,
+      webSearchStatus: undefined,
+      webSearchReason: undefined,
+      warnings: [],
+    });
+  });
+
+  it("preserves per-answer search outcomes and citation IDs through history and export", () => {
+    const [conversation] = restoreConversations(
+      JSON.stringify([
+        {
+          id: "chat",
+          title: "Search history",
+          documentIds: ["doc"],
+          turns: [
+            {
+              id: "turn",
+              question: "Question",
+              documentName: "Report.pdf",
+              status: "complete",
+              answer: "Finding [D1].",
+              searchMode: "hybrid",
+              webSearchStatus: "failed",
+              warnings: [
+                "Web search was unavailable. No web results were used.",
+                "private diagnostic",
+              ],
+              citations: [
+                {
+                  id: "D1",
+                  document_id: "doc",
+                  document_name: "Report.pdf",
+                  page: 1,
+                },
+              ],
+              webSources: [],
+            },
+          ],
+        },
+      ]),
+    );
+    expect(conversation.turns[0]).toMatchObject({
+      searchMode: "hybrid",
+      webSearchStatus: "failed",
+      warnings: ["Web search was unavailable. No web results were used."],
+    });
+    const exported = conversationMarkdown(conversation);
+    expect(exported).toContain("Search mode: Documents + web");
+    expect(exported).toContain("Web search: failed");
+    expect(exported).toContain("[D1] Report.pdf, page 1");
+    expect(exported).not.toContain("private diagnostic");
+  });
   it("restores interrupted turns as stopped without restoring raw tools or reasoning", () => {
     const [conversation] = restoreConversations(
       JSON.stringify([
