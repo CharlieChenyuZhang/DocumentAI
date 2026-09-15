@@ -55,3 +55,13 @@ def test_local_backend_is_explicitly_read_from_configuration(tmp_path, monkeypat
     assert config.Settings.from_env().vector_backend == "local"
     monkeypatch.setenv("VECTOR_BACKEND", "pinecone")
     assert config.Settings.from_env().vector_backend == "pinecone"
+
+
+def test_transcription_model_uses_default_and_server_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.delenv("OPENAI_TRANSCRIPTION_MODEL", raising=False)
+    assert config.Settings.from_env().transcription_model == "gpt-transcribe"
+    monkeypatch.setenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
+    assert config.Settings.from_env().transcription_model == "gpt-4o-mini-transcribe"
+    monkeypatch.setenv("OPENAI_TRANSCRIPTION_MODEL", " ")
+    assert config.Settings.from_env().transcription_model == "gpt-transcribe"

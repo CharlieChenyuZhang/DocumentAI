@@ -84,6 +84,20 @@ async function httpError(response: Response): Promise<ApiError> {
     );
   }
   const safeMessages: Record<string, string> = {
+    "Configure OPENAI_API_KEY and restart the agent service to use voice input.":
+      "Voice input needs an OpenAI API key. Update the workspace configuration and restart the agent service.",
+    "The voice transcription model is unavailable. Check OPENAI_TRANSCRIPTION_MODEL and project model access, then restart the agent service.":
+      "The voice model is unavailable. Check the workspace transcription model and OpenAI project access, then retry.",
+    "Voice transcription could not connect to OpenAI. Check the agent service network and try again.":
+      "The voice service could not connect to OpenAI. Check the agent service connection, then retry.",
+    "Voice transcription timed out. Try a shorter recording.":
+      "Voice transcription timed out. Try a shorter recording.",
+    "The recording could not be transcribed. Please record again.":
+      "The recording could not be transcribed. Please record again.",
+    "The transcript is too long. Please record a shorter question.":
+      "The transcript is too long. Please record a shorter question.",
+    "This audio format is not supported. Please try another browser.":
+      "This audio format is not supported. Please try another browser.",
     "The OpenAI API key is invalid or has been revoked. Update OPENAI_API_KEY and restart the agent service.":
       "The OpenAI API key is no longer valid. Update the workspace API key and restart the agent service, then retry.",
     "The agent service is unavailable. Start the agent service and try again.":
@@ -296,4 +310,39 @@ export async function deleteDocument(
     30_000,
     async () => undefined,
   );
+}
+
+export async function transcribeAudio(
+  audio: Blob,
+  options: RequestOptions = {},
+): Promise<string> {
+  const body = new FormData();
+  const extension = audio.type.startsWith("audio/mp4") ? "mp4" : "webm";
+  body.append("file", audio, `question.${extension}`);
+  try {
+    return await request(
+      "transcriptions",
+      { method: "POST", body },
+      options,
+      70_000,
+      async (response) => {
+        const result = await json(response);
+        if (
+          !isRecord(result) ||
+          typeof result.text !== "string" ||
+          result.text.length > 8_000
+        )
+          return invalidResponse();
+        return result.text.trim();
+      },
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 413)
+      throw new ApiError(
+        "This recording is too large. Try a shorter question.",
+        "http",
+        413,
+      );
+    throw error;
+  }
 }

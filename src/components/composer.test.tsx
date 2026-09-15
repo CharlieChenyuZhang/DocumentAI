@@ -1,22 +1,55 @@
 import { useState } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer, type ComposerProps } from "./composer";
 
-class MockSpeechRecognition {
-  static latest: MockSpeechRecognition;
-  continuous = false;
-  interimResults = false;
-  lang = "";
-  onresult: ((event: { results: { transcript: string }[][] }) => void) | null =
-    null;
-  onerror: ((event: { error: string }) => void) | null = null;
-  onend: (() => void) | null = null;
-  start = vi.fn();
-  abort = vi.fn(() => this.onend?.());
+class MockMediaRecorder {
+  static latest: MockMediaRecorder;
+  static isTypeSupported = (type: string) => type.startsWith("audio/webm");
+  state = "inactive";
+  mimeType = "audio/webm;codecs=opus";
+  ondataavailable: ((event: { data: Blob }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onstop: (() => void) | null = null;
+  start = vi.fn(() => {
+    this.state = "recording";
+  });
+  stop = vi.fn(() => {
+    this.state = "inactive";
+    this.ondataavailable?.({
+      data: new Blob(["recorded audio"], { type: this.mimeType }),
+    });
+    this.onstop?.();
+  });
   constructor() {
-    MockSpeechRecognition.latest = this;
+    MockMediaRecorder.latest = this;
   }
+}
+
+function audioSupport() {
+  const track = { stop: vi.fn(), onended: null as (() => void) | null };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+  const getUserMedia = vi.fn().mockResolvedValue(stream);
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  vi.stubGlobal("isSecureContext", true);
+  vi.stubGlobal("MediaRecorder", MockMediaRecorder);
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(Response.json({ text: "the main findings" }));
+  vi.stubGlobal("fetch", fetch);
+  return { getUserMedia, track, stream, fetch };
+}
+
+async function record() {
+  fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
+  await screen.findByRole("button", { name: "Stop voice input" });
+  return MockMediaRecorder.latest;
 }
 
 function harness(props: Partial<ComposerProps> = {}) {
@@ -27,15 +60,15 @@ function harness(props: Partial<ComposerProps> = {}) {
     const [value, setValue] = useState(props.value ?? "");
     return (
       <Composer
+        {...props}
         value={value}
         onChange={setValue}
         onSubmit={onSubmit}
         onStop={onStop}
         onUpload={onUpload}
-        disabled={false}
-        busy={false}
-        hasDocument={true}
-        {...props}
+        disabled={props.disabled ?? false}
+        busy={props.busy ?? false}
+        hasDocument={props.hasDocument ?? true}
       />
     );
   }
@@ -80,9 +113,8 @@ describe("Composer", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("falls back to typing when speech recognition is unsupported", () => {
-    vi.stubGlobal("SpeechRecognition", undefined);
-    vi.stubGlobal("webkitSpeechRecognition", undefined);
+  it("keeps typing available when microphone recording is unsupported", () => {
+    vi.stubGlobal("MediaRecorder", undefined);
     harness();
     expect(
       screen.queryByRole("button", { name: "Start voice input" }),
@@ -90,51 +122,133 @@ describe("Composer", () => {
     expect(screen.getByRole("textbox")).toBeEnabled();
   });
 
-  it("updates an editable draft without submitting and stops recording on manual edits", () => {
-    vi.stubGlobal("SpeechRecognition", MockSpeechRecognition);
-    const { onSubmit } = harness();
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "Explain" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
-    const recognition = MockSpeechRecognition.latest;
-    act(() =>
-      recognition.onresult?.({
-        results: [[{ transcript: "the main findings" }]],
-      }),
-    );
-    expect(screen.getByRole("textbox")).toHaveValue(
-      "Explain the main findings",
+  it("transcribes a recording into the existing editable draft without sending", async () => {
+    const { fetch, track } = audioSupport();
+    const { onSubmit } = harness({ value: "Explain" });
+    await record();
+    expect(
+      screen.getByRole("button", { name: "Send question" }),
+    ).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice input" }));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox")).toHaveValue(
+        "Explain the main findings",
+      ),
     );
     expect(onSubmit).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "Explain the methods" },
-    });
-    expect(recognition.abort).toHaveBeenCalledOnce();
-    expect(recognition.onresult).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Start voice input" }),
-    ).toHaveAttribute("aria-pressed", "false");
+    expect(track.stop).toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledOnce();
+    const [path, request] = fetch.mock.calls[0];
+    expect(path).toBe("/api/transcriptions");
+    expect(request.credentials).toBe("same-origin");
+    expect(request.body.get("file").type).toBe("audio/webm;codecs=opus");
+    expect(request.body.get("file").size).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Send question" })).toBeEnabled();
   });
 
-  it("shows microphone permission errors and cleans up recording on unmount", () => {
-    vi.stubGlobal("webkitSpeechRecognition", MockSpeechRecognition);
+  it("discards a recording when the draft is edited", async () => {
+    const { fetch, track } = audioSupport();
+    harness();
+    const recorder = await record();
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "A manual question" },
+    });
+    expect(recorder.stop).toHaveBeenCalledOnce();
+    expect(recorder.onstop).toBeNull();
+    expect(track.stop).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("A manual question");
+  });
+
+  it("aborts pending transcription and never overwrites a manual edit with a late response", async () => {
+    const { fetch } = audioSupport();
+    let resolve!: (response: Response) => void;
+    fetch.mockImplementation(
+      () =>
+        new Promise<Response>((done) => {
+          resolve = done;
+        }),
+    );
+    harness();
+    await record();
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice input" }));
+    await screen.findByRole("button", { name: "Cancel transcription" });
+    const signal = fetch.mock.calls[0][1].signal;
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Keep my edit" },
+    });
+    expect(signal.aborted).toBe(true);
+    await act(async () => {
+      resolve(Response.json({ text: "late transcript" }));
+    });
+    expect(screen.getByRole("textbox")).toHaveValue("Keep my edit");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("handles denied microphone permission and allows a retry", async () => {
+    const { getUserMedia, stream, track } = audioSupport();
+    getUserMedia.mockRejectedValueOnce(
+      new DOMException("denied", "NotAllowedError"),
+    );
     const { unmount } = harness();
     fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
-    act(() => MockSpeechRecognition.latest.onerror?.({ error: "not-allowed" }));
-    expect(screen.getByRole("alert")).toHaveTextContent(
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "Microphone access was denied",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
-    const recognition = MockSpeechRecognition.latest;
+    getUserMedia.mockResolvedValue(stream);
+    const recorder = await record();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     unmount();
-    expect(recognition.abort).toHaveBeenCalledOnce();
-    expect(recognition.onresult).toBeNull();
-    expect(recognition.onend).toBeNull();
+    expect(track.stop).toHaveBeenCalled();
+    expect(recorder.stop).toHaveBeenCalledOnce();
+    expect(recorder.onstop).toBeNull();
   });
 
-  it("stops dictation when busy and exposes the generation stop action", () => {
-    vi.stubGlobal("SpeechRecognition", MockSpeechRecognition);
+  it("releases a microphone that arrives after permission was cancelled", async () => {
+    const { getUserMedia, stream, track, fetch } = audioSupport();
+    let resolve!: (value: typeof stream) => void;
+    getUserMedia.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    harness();
+    fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel voice input" }));
+    await act(async () => {
+      resolve(stream);
+    });
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Start voice input" }),
+    ).toBeEnabled();
+  });
+
+  it("shows a recoverable no-speech result and sanitizes provider errors", async () => {
+    const { fetch } = audioSupport();
+    fetch.mockResolvedValueOnce(Response.json({ text: "  " }));
+    harness({ value: "My draft" });
+    await record();
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice input" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No speech detected",
+    );
+    fetch.mockResolvedValueOnce(
+      Response.json({ error: "private upstream diagnostics" }, { status: 503 }),
+    );
+    await record();
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice input" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "temporarily unavailable",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent("private upstream");
+    expect(screen.getByRole("textbox")).toHaveValue("My draft");
+  });
+
+  it("cancels voice capture when busy and exposes the generation stop action", async () => {
+    const { track, fetch } = audioSupport();
     const props: ComposerProps = {
       value: "",
       onChange: vi.fn(),
@@ -146,10 +260,10 @@ describe("Composer", () => {
       hasDocument: true,
     };
     const { rerender } = render(<Composer {...props} />);
-    fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
-    const recognition = MockSpeechRecognition.latest;
+    await record();
     rerender(<Composer {...props} busy />);
-    expect(recognition.abort).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Attach a PDF" })).toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Start voice input" }),

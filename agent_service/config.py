@@ -16,6 +16,7 @@ class Settings:
     service_token: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)
     openai_model: str = "gpt-5.6-sol"
+    transcription_model: str = "gpt-transcribe"
     serpapi_key: str = field(default="", repr=False)
     pinecone_api_key: str = field(default="", repr=False)
     pinecone_index_host: str = ""
@@ -47,6 +48,10 @@ class Settings:
             service_token=values.get("AGENT_SERVICE_TOKEN", ""),
             openai_api_key=values.get("OPENAI_API_KEY", ""),
             openai_model=values.get("OPENAI_MODEL", "gpt-5.6-sol"),
+            transcription_model=values.get(
+                "OPENAI_TRANSCRIPTION_MODEL", "gpt-transcribe"
+            ).strip()
+            or "gpt-transcribe",
             serpapi_key=values.get("SERPAPI_KEY", ""),
             pinecone_api_key=values.get("PINECONE_API_KEY", ""),
             pinecone_index_host=values.get("PINECONE_INDEX_HOST", ""),

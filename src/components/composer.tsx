@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
   useId,
   useRef,
@@ -10,36 +9,11 @@ import {
   type KeyboardEvent,
 } from "react";
 import { ArrowUp, Globe2, Mic, Paperclip, Square, X } from "lucide-react";
+import { supportsVoiceInput, VoiceInput } from "../lib/voice-input";
 import "./composer.css";
-
-type SpeechResultEvent = {
-  results: ArrayLike<ArrayLike<{ transcript: string }>>;
-};
-
-type SpeechRecognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechResultEvent) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  abort: () => void;
-};
-
-type SpeechWindow = Window & {
-  SpeechRecognition?: new () => SpeechRecognition;
-  webkitSpeechRecognition?: new () => SpeechRecognition;
-};
 
 const subscribeToSpeechSupport = () => () => {};
 const serverSpeechSupport = () => false;
-const browserSpeechSupport = () => {
-  const speechWindow = window as SpeechWindow;
-  return Boolean(
-    speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition,
-  );
-};
 
 export type ComposerProps = {
   value: string;
@@ -51,31 +25,6 @@ export type ComposerProps = {
   hasDocument: boolean;
   onUpload: () => void;
 };
-
-function releaseRecognition(recognition: SpeechRecognition | null) {
-  if (!recognition) return;
-  recognition.onresult = null;
-  recognition.onerror = null;
-  recognition.onend = null;
-  try {
-    recognition.abort();
-  } catch {
-    // Some browsers throw when a recognition session has already ended.
-  }
-}
-
-function speechErrorMessage(error: string) {
-  if (error === "not-allowed" || error === "service-not-allowed") {
-    return "Microphone access was denied. Allow access in your browser, or type your question.";
-  }
-  if (error === "audio-capture")
-    return "No microphone was found. You can still type your question.";
-  if (error === "no-speech")
-    return "No speech detected. Try again or type your question.";
-  if (error === "network")
-    return "Voice input could not connect. Try again or type your question.";
-  return "Voice input is unavailable right now. You can still type your question.";
-}
 
 export function Composer({
   value,
@@ -89,29 +38,33 @@ export function Composer({
 }: ComposerProps) {
   const speechSupported = useSyncExternalStore(
     subscribeToSpeechSupport,
-    browserSpeechSupport,
+    supportsVoiceInput,
     serverSpeechSupport,
   );
-  const [listening, setListening] = useState(false);
-  const [speechError, setSpeechError] = useState<string | null>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [voice] = useState(() => new VoiceInput());
+  const { phase, error: speechError } = useSyncExternalStore(
+    voice.subscribe,
+    voice.getSnapshot,
+    voice.getSnapshot,
+  );
+  const listening = phase === "recording";
+  const voiceActive = phase !== "idle";
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
-  const changeRef = useRef(onChange);
   const hintId = useId();
   const actionsDisabled = disabled || busy;
-  const canSubmit = !actionsDisabled && hasDocument && value.trim().length > 0;
+  const canSubmit =
+    !actionsDisabled && !voiceActive && hasDocument && value.trim().length > 0;
+
+  useEffect(() => () => voice.cancel(), [voice]);
 
   useEffect(() => {
-    changeRef.current = onChange;
-  }, [onChange]);
+    voice.cancel();
+  }, [value, voice]);
 
   useEffect(() => {
-    return () => {
-      releaseRecognition(recognitionRef.current);
-      recognitionRef.current = null;
-    };
-  }, []);
+    if (actionsDisabled) voice.cancel();
+  }, [actionsDisabled, voice]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -120,84 +73,31 @@ export function Composer({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [value]);
 
-  const stopRecording = useCallback(() => {
-    const recognition = recognitionRef.current;
-    recognitionRef.current = null;
-    releaseRecognition(recognition);
-    setListening(false);
-  }, []);
-
-  useEffect(() => {
-    if (actionsDisabled && recognitionRef.current) {
-      // The browser's end/error event updates recording state after aborting.
-      const recognition = recognitionRef.current;
-      recognition.onresult = null;
-      try {
-        recognition.abort();
-      } catch {
-        recognition.onend?.();
-      }
-    }
-  }, [actionsDisabled]);
-
   function toggleRecording() {
-    if (recognitionRef.current) {
-      stopRecording();
-      return;
-    }
-    if (actionsDisabled) return;
-    const speechWindow = window as SpeechWindow;
-    const Recognition =
-      speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
-    if (!Recognition) return;
-
-    setSpeechError(null);
-    const baseDraft = value.trimEnd();
-    let recognition: SpeechRecognition;
-    try {
-      recognition = new Recognition();
-      recognitionRef.current = recognition;
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = navigator.language || "en-US";
-      recognition.onresult = (event) => {
-        if (recognitionRef.current !== recognition) return;
-        const transcript = Array.from(
-          event.results,
-          (result) => result[0]?.transcript || "",
-        )
-          .join(" ")
-          .trim();
-        if (transcript)
-          changeRef.current(`${baseDraft}${baseDraft ? " " : ""}${transcript}`);
-      };
-      recognition.onerror = (event) => {
-        if (recognitionRef.current !== recognition) return;
-        if (event.error !== "aborted")
-          setSpeechError(speechErrorMessage(event.error));
-        stopRecording();
-      };
-      recognition.onend = () => {
-        if (recognitionRef.current !== recognition) return;
-        recognitionRef.current = null;
-        recognition.onresult = null;
-        recognition.onerror = null;
-        recognition.onend = null;
-        setListening(false);
-      };
-      setListening(true);
-      recognition.start();
-    } catch {
-      stopRecording();
-      setSpeechError(
-        "Voice input could not start. Check microphone access or type your question.",
-      );
+    if (listening) {
+      voice.finish();
+    } else if (voiceActive) {
+      voice.cancel();
+    } else if (!actionsDisabled) {
+      const baseDraft = value.trimEnd();
+      void voice.start((text) => {
+        onChange(`${baseDraft}${baseDraft ? " " : ""}${text}`);
+        textareaRef.current?.focus();
+      });
     }
   }
 
+  const voiceLabel = listening
+    ? "Stop voice input"
+    : phase === "requesting"
+      ? "Cancel voice input"
+      : phase === "transcribing"
+        ? "Cancel transcription"
+        : "Start voice input";
+
   function submit() {
     if (!canSubmit) return;
-    stopRecording();
+    voice.cancel();
     onSubmit();
   }
 
@@ -237,7 +137,7 @@ export function Composer({
           value={value}
           rows={2}
           onChange={(event) => {
-            stopRecording();
+            voice.cancel();
             onChange(event.target.value);
           }}
           onKeyDown={handleKeyDown}
@@ -257,7 +157,7 @@ export function Composer({
               title="Attach a PDF"
               disabled={actionsDisabled}
               onClick={() => {
-                stopRecording();
+                voice.cancel();
                 onUpload();
               }}
             >
@@ -276,16 +176,20 @@ export function Composer({
               <button
                 className={`doc-composer-icon${listening ? " doc-composer-mic-active" : ""}`}
                 type="button"
-                aria-label={
-                  listening ? "Stop voice input" : "Start voice input"
+                aria-label={voiceLabel}
+                aria-pressed={voiceActive}
+                title={
+                  voiceActive
+                    ? voiceLabel
+                    : "Dictate your question using OpenAI"
                 }
-                aria-pressed={listening}
-                title={listening ? "Stop voice input" : "Dictate your question"}
                 disabled={actionsDisabled}
                 onClick={toggleRecording}
               >
                 {listening ? (
                   <Square size={14} fill="currentColor" aria-hidden="true" />
+                ) : voiceActive ? (
+                  <X size={18} aria-hidden="true" />
                 ) : (
                   <Mic size={18} strokeWidth={1.7} aria-hidden="true" />
                 )}
@@ -318,8 +222,12 @@ export function Composer({
       <div className="doc-composer-caption" id={hintId}>
         <span role="status">
           {listening
-            ? "Listening. Your words will appear above for review."
-            : "Enter to send · Shift + Enter for a new line"}
+            ? "Recording. Click stop to transcribe with OpenAI. Up to 2 minutes."
+            : phase === "requesting"
+              ? "Allow microphone access to start recording."
+              : phase === "transcribing"
+                ? "Transcribing with OpenAI. Your question will be ready to review."
+                : "Enter to send · Shift + Enter for a new line"}
         </span>
       </div>
       {speechError && (
@@ -329,7 +237,7 @@ export function Composer({
             type="button"
             className="doc-composer-icon"
             aria-label="Dismiss voice input error"
-            onClick={() => setSpeechError(null)}
+            onClick={voice.dismissError}
           >
             <X size={15} aria-hidden="true" />
           </button>

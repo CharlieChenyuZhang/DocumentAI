@@ -25,6 +25,7 @@ from .document_store import (
     StoreConfigurationError,
     StoreUnavailableError,
 )
+from .transcription import MAX_AUDIO_REQUEST_BYTES, transcribe_request
 
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9:_-]{1,128}$")
 DOCUMENT_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -61,11 +62,10 @@ class ServiceBoundary:
                 {"detail": "A valid authenticated owner is required."}, 401
             )(scope, receive, send)
         scope.setdefault("state", {})["owner_id"] = owner
-        limit = (
-            MAX_FILE_BYTES + 1024 * 1024
-            if scope["path"] == "/documents"
-            else 512 * 1024
-        )
+        limit = {
+            "/documents": MAX_FILE_BYTES + 1024 * 1024,
+            "/transcriptions": MAX_AUDIO_REQUEST_BYTES,
+        }.get(scope["path"], 512 * 1024)
         length = headers.get("content-length")
         if length:
             try:
@@ -205,6 +205,13 @@ def create_app(
                 require_store().list_documents, request.state.owner_id
             )
         }
+
+    @app.post("/transcriptions")
+    async def transcriptions(request: Request):
+        return JSONResponse(
+            {"text": await transcribe_request(request, settings)},
+            headers={"Cache-Control": "private, no-store"},
+        )
 
     @app.post("/documents", status_code=201)
     async def upload_document(request: Request, file: Annotated[UploadFile, File()]):

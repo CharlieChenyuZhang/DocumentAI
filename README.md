@@ -31,6 +31,7 @@ Edit `.env.local`:
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
 | `OPENAI_API_KEY`              | A valid OpenAI API key with access to the generation and embedding models.                  |
 | `OPENAI_MODEL`                | Defaults to `gpt-5.6-sol`; no silent model substitution.                                    |
+| `OPENAI_TRANSCRIPTION_MODEL`  | Voice input model, defaults to `gpt-transcribe`.                                            |
 | `OPENAI_EMBEDDING_MODEL`      | Defaults to `text-embedding-3-small`.                                                       |
 | `OPENAI_EMBEDDING_DIMENSIONS` | Defaults to `1536`, matching the Pinecone index.                                            |
 | `VECTOR_BACKEND`              | `local` for persistent SQLite cosine search; `pinecone` for the existing cloud integration. |
@@ -83,6 +84,7 @@ Every document read, retrieval, and deletion checks the server-owned SQLite cata
 - Upload PDF files up to 20 MiB and select up to 20 documents per question. Server limits also bound pages, extracted text, and chunks.
 - Persistent document library; PDFs do not need re-uploading after a refresh or before every question.
 - Streaming Markdown answers, source labels, explicit retrieval/search progress, copy, read aloud, editable voice dictation, retry, and Markdown export.
+- Voice input records up to two minutes with the browser microphone. Click stop to send the recording to OpenAI through authenticated `/api/transcriptions` and the private agent service. Review or edit the transcript before sending your question. Recordings are limited to 8 MiB, processed in memory, and not stored by Document AI. Editing the draft, changing conversations, or cancelling stops capture and discards late results.
 - Optional web search uses an actual stdio MCP server backed by SerpAPI. The planner receives the user question and document count, not retrieved document contents. Search queries still leave the application when web search is enabled.
 - Stop aborts the active browser stream and its corresponding upstream agent execution. A provider request or blocking vector operation already submitted may finish, but the canceled run must not continue to synthesis or append a late answer.
 - Clearing local chat history does not delete uploaded PDFs. Document deletion is a separate library action.
