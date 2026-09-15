@@ -55,16 +55,55 @@ export function validatePdf(file: File): string | null {
   return null;
 }
 
-function httpError(status: number): ApiError {
+async function httpError(response: Response): Promise<ApiError> {
+  const status = response.status;
   if (status === 401)
     return new ApiError(
       "Your session has expired. Reload the page to sign in.",
       "http",
       status,
     );
+  // Match known public errors and use our own copy. Never display arbitrary
+  // provider diagnostics, HTML, credentials, or stack traces from a response.
+  const payload: unknown = response.headers
+    .get("content-type")
+    ?.includes("application/json")
+    ? await response.json().catch(() => null)
+    : null;
+  const detail =
+    isRecord(payload) && typeof payload.error === "string" ? payload.error : "";
+  if (
+    detail ===
+      "Complete the agent service configuration before uploading or searching documents." ||
+    detail.startsWith("Document storage is not configured.")
+  ) {
+    return new ApiError(
+      "Document storage needs setup before files can be loaded. Complete the workspace configuration, then retry.",
+      "http",
+      status,
+    );
+  }
+  const safeMessages: Record<string, string> = {
+    "The OpenAI API key is invalid or has been revoked. Update OPENAI_API_KEY and restart the agent service.":
+      "The OpenAI API key is no longer valid. Update the workspace API key and restart the agent service, then retry.",
+    "The agent service is unavailable. Start the agent service and try again.":
+      "Document service is unavailable. Check that the agent service is running, then retry.",
+    "Configure AGENT_SERVICE_TOKEN before using the agent.":
+      "Document service needs setup. Complete the workspace configuration, then retry.",
+    "Re-upload these documents after changing the embedding model.":
+      "The document index has changed. Upload these documents again before asking another question.",
+    "Some document chunks could not be indexed. Please retry the upload.":
+      "This document could not be fully indexed. Please upload it again.",
+    "The document is unavailable.":
+      "This document is no longer available. Choose another document from your library.",
+    "Choose a PDF file.": "Choose a PDF document (.pdf).",
+  };
+  if (Object.hasOwn(safeMessages, detail)) {
+    return new ApiError(safeMessages[detail], "http", status);
+  }
   if (status === 503)
     return new ApiError(
-      "Document AI is not configured or is temporarily unavailable. Please try again after the service is ready.",
+      "The service is temporarily unavailable. Please try again in a moment.",
       "http",
       status,
     );
@@ -118,7 +157,7 @@ async function request<T>(
       ...init,
       signal: controller.signal,
     });
-    if (!response.ok) throw httpError(response.status);
+    if (!response.ok) throw await httpError(response);
     const result = await read(response);
     // A cancellation may arrive while an already-buffered response is parsed.
     controller.signal.throwIfAborted();

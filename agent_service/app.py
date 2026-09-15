@@ -150,7 +150,8 @@ def create_app(
     if store is None and not settings.missing:
         store = DocumentStore(
             StoreConfig(
-                data_dir=settings.data_dir,
+                data_dir=settings.storage_dir,
+                vector_backend=settings.vector_backend,
                 pinecone_api_key=settings.pinecone_api_key,
                 pinecone_index_host=settings.pinecone_index_host,
                 pinecone_index_name=settings.pinecone_index_name,
@@ -194,6 +195,7 @@ def create_app(
             "missing": settings.missing,
             "web_search": bool(settings.serpapi_key),
             "model": settings.openai_model,
+            "vector_backend": settings.vector_backend,
         }
 
     @app.get("/documents")

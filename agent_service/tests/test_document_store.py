@@ -3,7 +3,9 @@
 from dataclasses import replace
 from io import BytesIO
 
+import httpx
 import pytest
+from openai import AuthenticationError
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
@@ -410,3 +412,36 @@ def test_search_does_not_present_stale_results_as_a_successful_retrieval(setup):
     assert len(index.queries) == 5
     assert embeddings.queries == ["Search"]
     assert sleeps == [1, 2, 4, 8]
+
+
+@pytest.mark.parametrize("operation", ["upload", "search"])
+def test_invalid_openai_key_is_actionable_without_exposing_provider_details(
+    setup, monkeypatch, operation
+):
+    store, _, embeddings, _ = setup
+    doc = store.upload("alice", "existing.pdf", pdf_bytes())
+
+    def denied(*args):
+        response = httpx.Response(
+            401, request=httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+        )
+        raise AuthenticationError(
+            "provider included synthetic-private-key",
+            response=response,
+            body={"code": "token_invalidated"},
+        )
+
+    monkeypatch.setattr(
+        embeddings,
+        "embed_documents" if operation == "upload" else "embed_query",
+        denied,
+    )
+    with pytest.raises(
+        StoreConfigurationError, match="OpenAI API key is invalid"
+    ) as caught:
+        if operation == "upload":
+            store.upload("alice", "new.pdf", pdf_bytes())
+        else:
+            store.search("alice", [doc["id"]], "Search")
+    assert "synthetic-private-key" not in str(caught.value)
+    assert "OPENAI_API_KEY" in str(caught.value)

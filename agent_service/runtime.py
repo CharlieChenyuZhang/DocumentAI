@@ -393,7 +393,7 @@ def build_bridge(
     session_service: Any = None,
     web_search: Any = None,
 ) -> OwnerScopedADKAgent:
-    settings.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    settings.storage_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     model = model or LiteLlm(
         model=f"openai/{settings.openai_model}",
         api_key=settings.openai_api_key,

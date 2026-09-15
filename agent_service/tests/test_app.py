@@ -84,6 +84,7 @@ async def test_health_exposes_presence_only(service):
         "missing": [],
         "web_search": True,
         "model": "gpt-5.6-sol",
+        "vector_backend": "pinecone",
     }
     assert settings.openai_api_key not in response.text
     missing_app = create_app(replace(settings, pinecone_api_key=""))

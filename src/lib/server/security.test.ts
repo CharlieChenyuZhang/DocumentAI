@@ -56,6 +56,25 @@ describe("server identity", () => {
 });
 
 describe("CopilotKit thread isolation", () => {
+  it("isolates reconnect and stop across storage profiles for the same owner", async () => {
+    const delegate = {
+      run: vi.fn(() => EMPTY),
+      connect: vi.fn(() => EMPTY),
+      stop: vi.fn(async () => true),
+      isRunning: vi.fn(async () => false),
+    } as unknown as AgentRunner;
+    const local = new ScopedRunner("github:alice", delegate, "local");
+    const cloud = new ScopedRunner("github:alice", delegate, "pinecone");
+    local.connect({ threadId: "shared-client-thread" });
+    cloud.connect({ threadId: "shared-client-thread" });
+    const calls = vi.mocked(delegate.connect).mock.calls;
+    expect(calls[0][0].threadId).not.toBe(calls[1][0].threadId);
+    await local.stop({ threadId: "shared-client-thread", runId: "local-run" });
+    expect(delegate.stop).toHaveBeenCalledWith({
+      threadId: calls[0][0].threadId,
+      runId: "local-run",
+    });
+  });
   it("scopes run, reconnect, status, and stop to the authenticated owner", async () => {
     const delegate = {
       run: vi.fn(() => EMPTY),

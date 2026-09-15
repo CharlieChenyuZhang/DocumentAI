@@ -22,6 +22,6 @@ if (existsSync(target)) {
     );
   writeFileSync(target, content, { mode: 0o600, flag: "wx" });
   console.log(
-    "Created .env.local with private local secrets. Add Pinecone configuration there. The agent can reuse existing server/.env OpenAI and SerpAPI keys.",
+    "Created .env.local with private local secrets and local vector storage. Add your OpenAI key there. Set VECTOR_BACKEND=pinecone and its credentials to use Pinecone. Existing server/.env OpenAI and SerpAPI keys can be reused.",
   );
 }

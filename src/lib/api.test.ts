@@ -71,6 +71,54 @@ describe("authenticated document API", () => {
   });
 });
 describe("safe request failures", () => {
+  it.each([
+    [
+      "The OpenAI API key is invalid or has been revoked. Update OPENAI_API_KEY and restart the agent service.",
+      "The OpenAI API key is no longer valid. Update the workspace API key and restart the agent service, then retry.",
+    ],
+    [
+      "Complete the agent service configuration before uploading or searching documents.",
+      "Document storage needs setup before files can be loaded.",
+    ],
+    [
+      "Document storage is not configured. Private provider details omitted.",
+      "Complete the workspace configuration, then retry.",
+    ],
+    [
+      "The agent service is unavailable. Start the agent service and try again.",
+      "Check that the agent service is running, then retry.",
+    ],
+  ])(
+    "maps known service errors to safe, actionable instructions: %s",
+    async (error, expected) => {
+      fetchMock.mockResolvedValue(Response.json({ error }, { status: 503 }));
+      const failure = await listDocuments().catch((cause: unknown) => cause);
+      expect(failure).toMatchObject({ code: "http", status: 503 });
+      expect((failure as Error).message).toContain(expected);
+      expect((failure as Error).message).not.toContain("Private provider");
+    },
+  );
+  it.each([
+    Response.json(
+      {
+        error:
+          "The OpenAI API key is invalid or has been revoked. Update OPENAI_API_KEY and restart the agent service. Credentials: PRIVATE_CREDENTIAL_SENTINEL.",
+      },
+      { status: 503 },
+    ),
+    Response.json(
+      { error: "Private provider credential and stack trace" },
+      { status: 503 },
+    ),
+    new Response("<html>Private proxy diagnostics</html>", { status: 503 }),
+  ])("does not display unknown 503 error content", async (response) => {
+    fetchMock.mockResolvedValue(response);
+    await expect(listDocuments()).rejects.toMatchObject({
+      status: 503,
+      message:
+        "The service is temporarily unavailable. Please try again in a moment.",
+    });
+  });
   it("hides raw server errors and describes expired sessions", async () => {
     fetchMock.mockResolvedValue(
       new Response("private stack trace", { status: 401 }),

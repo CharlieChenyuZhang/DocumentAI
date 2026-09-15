@@ -14,9 +14,13 @@ const sharedRunner = new InMemoryAgentRunner({
   maxBytes: 128 * 1024 * 1024,
 });
 
-export function scopedThread(owner: string, thread: string) {
+export function scopedThread(
+  owner: string,
+  thread: string,
+  profile: "local" | "pinecone" = "pinecone",
+) {
   return createHash("sha256")
-    .update(JSON.stringify([owner, thread]))
+    .update(JSON.stringify([owner, profile, thread]))
     .digest("hex");
 }
 
@@ -28,31 +32,32 @@ export class ScopedRunner extends AgentRunner {
   constructor(
     private owner: string,
     private delegate: AgentRunner = sharedRunner,
+    private profile: "local" | "pinecone" = "pinecone",
   ) {
     super();
   }
   run(request: AgentRunnerRunRequest) {
     return this.delegate.run({
       ...request,
-      threadId: scopedThread(this.owner, request.threadId),
+      threadId: scopedThread(this.owner, request.threadId, this.profile),
     });
   }
   connect(request: AgentRunnerConnectRequest) {
     return this.delegate.connect({
       ...request,
-      threadId: scopedThread(this.owner, request.threadId),
+      threadId: scopedThread(this.owner, request.threadId, this.profile),
     });
   }
   isRunning(request: AgentRunnerIsRunningRequest) {
     return this.delegate.isRunning({
       ...request,
-      threadId: scopedThread(this.owner, request.threadId),
+      threadId: scopedThread(this.owner, request.threadId, this.profile),
     });
   }
   stop(request: AgentRunnerStopRequest) {
     return this.delegate.stop({
       ...request,
-      threadId: scopedThread(this.owner, request.threadId),
+      threadId: scopedThread(this.owner, request.threadId, this.profile),
     });
   }
 }

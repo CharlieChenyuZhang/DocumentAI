@@ -1,8 +1,8 @@
 """Durable PDF ingestion and retrieval, scoped to a server-authenticated owner.
 
 The caller must derive ``owner_id`` from its authenticated session. A document ID
-or a client-supplied namespace is never sufficient authorization. Pinecone stores
-vectors; SQLite holds the authoritative ownership and ingestion status catalog.
+or a client-supplied namespace is never sufficient authorization. The configured
+vector backend stores embeddings; SQLite is the authoritative ownership catalog.
 """
 
 from __future__ import annotations
@@ -21,7 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from openai import AuthenticationError
+
 logger = logging.getLogger(__name__)
+OPENAI_KEY_ERROR = (
+    "The OpenAI API key is invalid or has been revoked. "
+    "Update OPENAI_API_KEY and restart the agent service."
+)
 
 
 class StoreConfigurationError(RuntimeError):
@@ -46,6 +52,7 @@ class StoreConfig:
     pinecone_api_key: str = field(default="", repr=False)
     pinecone_index_host: str = ""
     pinecone_index_name: str = ""
+    vector_backend: str = "pinecone"
     openai_api_key: str = field(default="", repr=False)
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
@@ -62,6 +69,8 @@ class StoreConfig:
     retry_attempts: int = 3
 
     def __post_init__(self) -> None:
+        if self.vector_backend not in {"local", "pinecone"}:
+            raise StoreConfigurationError("VECTOR_BACKEND must be local or pinecone.")
         positive = (
             self.embedding_dimensions,
             self.max_upload_bytes,
@@ -89,8 +98,8 @@ class StoreConfig:
 class DocumentStore:
     """Blocking operations; async HTTP handlers should call via asyncio.to_thread.
 
-    Provider dependencies may be injected for offline tests. Production has no
-    in-memory fallback and never provisions or modifies a Pinecone index.
+    Provider dependencies may be injected for offline tests. Local SQLite vector
+    storage must be selected explicitly; Pinecone errors never change providers.
     """
 
     def __init__(
@@ -222,6 +231,12 @@ class DocumentStore:
                 max_retries=0,
                 chunk_size=self.config.batch_size,
             )
+        if self._index is None and self.config.vector_backend == "local":
+            from .local_vector_index import SQLiteVectorIndex
+
+            self._index = SQLiteVectorIndex(
+                self.data_dir / "vectors.sqlite3", self.config.embedding_dimensions
+            )
         if self._index is None:
             if not self.config.pinecone_api_key or not (
                 self.config.pinecone_index_host or self.config.pinecone_index_name
@@ -253,7 +268,7 @@ class DocumentStore:
                 != self.config.embedding_dimensions
             ):
                 raise StoreConfigurationError(
-                    "The Pinecone index dimension does not match EMBEDDING_DIMENSIONS."
+                    "The vector index dimension does not match EMBEDDING_DIMENSIONS."
                 )
             self._index_checked = True
         return self._index, self._embeddings
@@ -515,6 +530,8 @@ class DocumentStore:
                 ),
             ):
                 raise
+            if isinstance(error, AuthenticationError):
+                raise StoreConfigurationError(OPENAI_KEY_ERROR) from error
             raise StoreUnavailableError(
                 "Document indexing failed. Check service configuration and retry."
             ) from error
@@ -604,6 +621,8 @@ class DocumentStore:
         except (StoreConfigurationError, DocumentAccessError, StoreUnavailableError):
             raise
         except Exception as error:
+            if isinstance(error, AuthenticationError):
+                raise StoreConfigurationError(OPENAI_KEY_ERROR) from error
             raise StoreUnavailableError(
                 "Document search is unavailable. Please try again."
             ) from error

@@ -158,8 +158,10 @@ export function Workspace() {
         </form>
       </main>
     );
+  const vectorBackend =
+    session.configuration?.vector_backend === "local" ? "local" : "pinecone";
   return (
-    <AgentBoundary key={session.user.id}>
+    <AgentBoundary key={`${session.user.id}:${vectorBackend}`}>
       <CopilotKit
         runtimeUrl="/api/copilotkit"
         useSingleEndpoint={false}
@@ -170,6 +172,7 @@ export function Workspace() {
       >
         <DocumentWorkspace
           user={session.user}
+          vectorBackend={vectorBackend}
           availableWebSearch={session.configuration?.web_search === true}
         />
       </CopilotKit>
@@ -186,9 +189,11 @@ type ActiveRun = {
 };
 function DocumentWorkspace({
   user,
+  vectorBackend,
   availableWebSearch,
 }: {
   user: NonNullable<SessionInfo["user"]>;
+  vectorBackend: "local" | "pinecone";
   availableWebSearch: boolean;
 }) {
   const { agent, isReady } = useAgent({ agentId: "document_ai" });
@@ -198,6 +203,7 @@ function DocumentWorkspace({
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
+  const [documentLoadError, setDocumentLoadError] = useState("");
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<"idle" | "uploading" | "answering">(
     "idle",
@@ -211,6 +217,7 @@ function DocumentWorkspace({
   const [uploadName, setUploadName] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const controller = useRef<AbortController | null>(null);
+  const documentController = useRef<AbortController | null>(null);
   const locked = useRef(false);
   const activeRun = useRef<ActiveRun | null>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -220,7 +227,7 @@ function DocumentWorkspace({
   const scrollEnd = useRef<HTMLDivElement>(null);
   const scrollPanel = useRef<HTMLElement>(null);
   const followAnswer = useRef(true);
-  const storageKey = `${STORAGE_KEY}:${user.id}`;
+  const storageKey = `${STORAGE_KEY}:${user.id}${vectorBackend === "local" ? ":local" : ""}`;
   const conversation = conversations.find((item) => item.id === activeId);
   const selectedDocuments = documents.filter((document) =>
     conversation?.documentIds.includes(document.id),
@@ -240,6 +247,30 @@ function DocumentWorkspace({
     [],
   );
 
+  const refreshDocuments = useCallback(async () => {
+    documentController.current?.abort();
+    const request = new AbortController();
+    documentController.current = request;
+    setLoadingDocuments(true);
+    setDocumentLoadError("");
+    try {
+      const loadedDocuments = await listDocuments({ signal: request.signal });
+      if (!request.signal.aborted) setDocuments(loadedDocuments);
+    } catch (cause) {
+      if (!request.signal.aborted) {
+        setDocumentLoadError(
+          cause instanceof Error
+            ? cause.message
+            : "The document service is unavailable. Please try again.",
+        );
+      }
+    } finally {
+      if (!request.signal.aborted) setLoadingDocuments(false);
+      if (documentController.current === request)
+        documentController.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     let restored: Conversation[] = [];
     try {
@@ -251,26 +282,12 @@ function DocumentWorkspace({
     setConversations(initial);
     setActiveId(initial[0].id);
     setHydrated(true);
-    const request = new AbortController();
-    controller.current = request;
-    void listDocuments({ signal: request.signal })
-      .then(setDocuments)
-      .catch((cause) => {
-        if (!request.signal.aborted)
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "Could not load your documents.",
-          );
-      })
-      .finally(() => {
-        if (!request.signal.aborted) setLoadingDocuments(false);
-      });
+    void refreshDocuments();
     return () => {
-      request.abort();
+      documentController.current?.abort();
       controller.current?.abort();
     };
-  }, [storageKey]);
+  }, [storageKey, refreshDocuments]);
   useEffect(() => {
     if (!hydrated) return;
     try {
@@ -896,6 +913,28 @@ function DocumentWorkspace({
             )}
           </section>
           <div className="composer-area">
+            {loadingDocuments && (
+              <p className="upload-progress" role="status">
+                <LoaderCircle className="animate-spin" size={15} />
+                Loading your documents…
+              </p>
+            )}
+            {documentLoadError && (
+              <div className="inline-alert" role="alert">
+                <CircleHelp size={16} />
+                <span>
+                  <strong>Could not load your documents.</strong>{" "}
+                  {documentLoadError}
+                </span>
+                <button
+                  className="secondary-button"
+                  disabled={busy || loadingDocuments}
+                  onClick={() => void refreshDocuments()}
+                >
+                  Retry documents
+                </button>
+              </div>
+            )}
             {error && (
               <div className="inline-alert" role="alert">
                 <CircleHelp size={16} />
@@ -978,9 +1017,23 @@ function DocumentWorkspace({
             <p className="document-library-hint">
               Select the documents to search in this conversation.
             </p>
-            {loadingDocuments ? (
-              <p role="status">Loading your documents…</p>
-            ) : documents.length ? (
+            {loadingDocuments && <p role="status">Loading your documents…</p>}
+            {documentLoadError && (
+              <div className="document-library-error" role="alert">
+                <p>
+                  <strong>Could not load your documents.</strong>{" "}
+                  {documentLoadError}
+                </p>
+                <button
+                  className="secondary-button"
+                  disabled={busy || loadingDocuments}
+                  onClick={() => void refreshDocuments()}
+                >
+                  Retry documents
+                </button>
+              </div>
+            )}
+            {documents.length > 0 && (
               <ul className="document-library">
                 {documents.map((document) => (
                   <li key={document.id}>
@@ -1014,9 +1067,12 @@ function DocumentWorkspace({
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="empty-source">Your library is empty.</p>
             )}
+            {!loadingDocuments &&
+              !documentLoadError &&
+              documents.length === 0 && (
+                <p className="empty-source">Your library is empty.</p>
+              )}
             <button
               className="primary-button"
               onClick={chooseFile}

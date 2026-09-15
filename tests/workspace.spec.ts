@@ -141,7 +141,12 @@ async function mockBackend(
     authenticated?: boolean;
     owner?: string;
     webSearch?: boolean | null;
+    vectorBackend?: "local" | "pinecone";
     onRun?: (route: Route, input: RunInput, attempt: number) => Promise<void>;
+    onListDocuments?: (
+      route: Route,
+      documents: DocumentFixture[],
+    ) => Promise<void>;
     documents?: DocumentFixture[];
   } = {},
 ) {
@@ -150,6 +155,7 @@ async function mockBackend(
   const stoppedRuns: string[] = [];
   let documents = options.documents ?? [];
   let owner = options.owner ?? "user-a";
+  let vectorBackend = options.vectorBackend;
   await page.route("**/*", async (route) => {
     if (new URL(route.request().url()).origin !== appOrigin)
       await route.abort();
@@ -166,6 +172,7 @@ async function mockBackend(
           authMode: "session",
           configuration: {
             ready: true,
+            ...(vectorBackend ? { vector_backend: vectorBackend } : {}),
             ...(options.webSearch !== null
               ? { web_search: options.webSearch ?? true }
               : {}),
@@ -176,9 +183,11 @@ async function mockBackend(
               : { id: owner, kind: "session" },
         },
       });
-    } else if (path === "/api/documents" && request.method() === "GET")
-      await route.fulfill({ json: { documents } });
-    else if (path === "/api/documents" && request.method() === "POST") {
+    } else if (path === "/api/documents" && request.method() === "GET") {
+      if (options.onListDocuments)
+        await options.onListDocuments(route, documents);
+      else await route.fulfill({ json: { documents } });
+    } else if (path === "/api/documents" && request.method() === "POST") {
       const multipart = request.postDataBuffer()?.toString() ?? "";
       const name = multipart.match(/filename="([^"]+)"/)?.[1];
       expect(multipart).toContain('name="file"');
@@ -231,6 +240,13 @@ async function mockBackend(
     setOwner(id: string) {
       owner = id;
       documents = [];
+    },
+    setVectorBackend(
+      backend: "local" | "pinecone",
+      library: DocumentFixture[] = [],
+    ) {
+      vectorBackend = backend;
+      documents = library;
     },
   };
 }
@@ -731,3 +747,138 @@ for (const webSearch of [false, null]) {
     await expect(page.getByText("Sources (1)", { exact: true })).toBeVisible();
   });
 }
+
+test("a failed library load is recoverable and preserves selected document IDs", async ({
+  page,
+}) => {
+  let available = false;
+  let reads = 0;
+  let releaseLibrary!: () => void;
+  const libraryResponse = new Promise<void>((resolve) => {
+    releaseLibrary = resolve;
+  });
+  await page.addInitScript(() => {
+    sessionStorage.setItem(
+      "document-ai:conversations:v2:user-a",
+      JSON.stringify([
+        {
+          id: "saved-conversation",
+          title: "Saved conversation",
+          documentIds: ["saved-report.pdf"],
+          turns: [],
+        },
+      ]),
+    );
+  });
+  const backend = await mockBackend(page, {
+    documents: [documentFixture("saved-report.pdf")],
+    onListDocuments: async (route, documents) => {
+      reads += 1;
+      if (!available) {
+        await route.fulfill({
+          status: 503,
+          json: {
+            error:
+              "Document storage is not configured. Private provider details must not appear.",
+          },
+        });
+      } else {
+        await libraryResponse;
+        await route.fulfill({ json: { documents } });
+      }
+    },
+  });
+  await page.goto("/");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(
+    "Document storage needs setup",
+  );
+  await page.getByRole("button", { name: "Show documents" }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "Your documents",
+    exact: true,
+  });
+  await expect(dialog.getByRole("alert")).toContainText(
+    "Could not load your documents",
+  );
+  await expect(dialog.getByText("Your library is empty.")).toHaveCount(0);
+  await expect(dialog.getByText(/Private provider details/)).toHaveCount(0);
+  const failedReads = reads;
+  available = true;
+  await dialog.getByRole("button", { name: "Retry documents" }).click();
+  await expect(dialog.getByRole("status")).toContainText(
+    "Loading your documents",
+  );
+  await expect(dialog.getByText("Your library is empty.")).toHaveCount(0);
+  releaseLibrary();
+  await expect(
+    dialog.getByRole("checkbox", { name: /saved-report.pdf/ }),
+  ).toBeChecked();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  expect(reads).toBeGreaterThan(failedReads);
+  await dialog.getByRole("button", { name: "Close documents" }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
+  await ask(page, "Summarize the recovered document");
+  await expect(page.getByRole("button", { name: "Copy answer" })).toBeVisible();
+  expect(backend.runs[0].state.document_ids).toEqual(["saved-report.pdf"]);
+  expect(backend.uploads).toEqual([]);
+});
+
+test("keeps the same owner's local and Pinecone chat histories separate across profile changes", async ({
+  page,
+}) => {
+  // An absent backend preserves the original Pinecone history key.
+  const backend = await mockBackend(page);
+  await page.goto("/");
+  await page.getByTestId("pdf-input").setInputFiles(pdf("cloud-report.pdf"));
+  await ask(page, "Question from my Pinecone profile");
+  await expect(page.getByRole("button", { name: "Copy answer" })).toBeVisible();
+  const pineconeThread = backend.runs[0].threadId;
+
+  backend.setVectorBackend("local");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(
+    page.getByRole("heading", { name: "Ask your documents" }),
+  ).toBeVisible();
+  await expect(page.getByText("Question from my Pinecone profile")).toHaveCount(
+    0,
+  );
+  await page.getByTestId("pdf-input").setInputFiles(pdf("local-report.pdf"));
+  await ask(page, "Question from my local profile");
+  await expect(page.getByRole("button", { name: "Copy answer" })).toBeVisible();
+  const localThread = backend.runs[1].threadId;
+  expect(localThread).not.toBe(pineconeThread);
+
+  backend.setVectorBackend("pinecone", [documentFixture("cloud-report.pdf")]);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(
+    page.getByRole("heading", {
+      name: "Question from my Pinecone profile",
+      level: 1,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("Question from my local profile")).toHaveCount(0);
+  await ask(page, "Continue my Pinecone conversation");
+  await expect(page.getByRole("button", { name: "Copy answer" })).toHaveCount(
+    2,
+  );
+  expect(backend.runs[2].threadId).toBe(pineconeThread);
+  expect(backend.runs[2].state.document_ids).toEqual(["cloud-report.pdf"]);
+
+  backend.setVectorBackend("local", [documentFixture("local-report.pdf")]);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(
+    page.getByRole("heading", {
+      name: "Question from my local profile",
+      level: 1,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("Continue my Pinecone conversation")).toHaveCount(
+    0,
+  );
+  await ask(page, "Continue my local conversation");
+  await expect(page.getByRole("button", { name: "Copy answer" })).toHaveCount(
+    2,
+  );
+  expect(backend.runs[3].threadId).toBe(localThread);
+  expect(backend.runs[3].state.document_ids).toEqual(["local-report.pdf"]);
+});

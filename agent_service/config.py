@@ -20,9 +20,14 @@ class Settings:
     pinecone_api_key: str = field(default="", repr=False)
     pinecone_index_host: str = ""
     pinecone_index_name: str = ""
+    vector_backend: str = "pinecone"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
     data_dir: Path = ROOT / ".data" / "documentai"
+
+    def __post_init__(self) -> None:
+        if self.vector_backend not in {"local", "pinecone"}:
+            raise ValueError("VECTOR_BACKEND must be local or pinecone.")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -46,6 +51,7 @@ class Settings:
             pinecone_api_key=values.get("PINECONE_API_KEY", ""),
             pinecone_index_host=values.get("PINECONE_INDEX_HOST", ""),
             pinecone_index_name=values.get("PINECONE_INDEX_NAME", ""),
+            vector_backend=values.get("VECTOR_BACKEND", "pinecone"),
             embedding_model=values.get(
                 "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
             ),
@@ -60,12 +66,25 @@ class Settings:
         required = {
             "AGENT_SERVICE_TOKEN": self.service_token,
             "OPENAI_API_KEY": self.openai_api_key,
-            "PINECONE_API_KEY": self.pinecone_api_key,
-            "PINECONE_INDEX_HOST or PINECONE_INDEX_NAME": self.pinecone_index_host
-            or self.pinecone_index_name,
         }
+        if self.vector_backend == "pinecone":
+            required.update(
+                {
+                    "PINECONE_API_KEY": self.pinecone_api_key,
+                    "PINECONE_INDEX_HOST or PINECONE_INDEX_NAME": self.pinecone_index_host
+                    or self.pinecone_index_name,
+                }
+            )
         return [name for name, value in required.items() if not value]
 
     @property
+    def storage_dir(self) -> Path:
+        # Keep local documents, vectors and agent history separate from the
+        # existing Pinecone profile. Switching providers never migrates data.
+        return (
+            self.data_dir / "local" if self.vector_backend == "local" else self.data_dir
+        )
+
+    @property
     def session_url(self) -> str:
-        return f"sqlite+aiosqlite:///{self.data_dir / 'sessions.sqlite3'}"
+        return f"sqlite+aiosqlite:///{self.storage_dir / 'sessions.sqlite3'}"

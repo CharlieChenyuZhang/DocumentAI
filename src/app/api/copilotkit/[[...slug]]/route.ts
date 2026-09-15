@@ -26,7 +26,11 @@ async function handle(request: Request) {
       throw new HttpError(404, "Endpoint not found.");
     const user = await requirePrincipal();
     const connection = serviceConnection(user);
-    const runner = new ScopedRunner(user.id);
+    const runner = new ScopedRunner(
+      user.id,
+      undefined,
+      process.env.VECTOR_BACKEND === "local" ? "local" : "pinecone",
+    );
     const pathname = new URL(request.url).pathname.replace(/\/$/, "");
     if (pathname.includes("/stop/")) {
       const runId = request.headers.get("x-documentai-run-id");
