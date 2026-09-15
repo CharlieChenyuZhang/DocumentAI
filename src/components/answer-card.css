@@ -1,0 +1,471 @@
+.answer-turn {
+  width: 100%;
+  min-width: 0;
+  color: #252723;
+}
+
+.answer-turn + .answer-turn {
+  margin-top: 40px;
+}
+
+.answer-question {
+  max-width: min(88%, 670px);
+  margin: 0 0 26px auto;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #f3f4f0;
+}
+
+.answer-question-label {
+  margin-bottom: 4px;
+  color: #6c7168;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.answer-question h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answer-response {
+  min-width: 0;
+}
+
+.answer-assistant-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 16px;
+}
+
+.answer-avatar {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  place-items: center;
+  color: #2f4938;
+}
+
+.answer-assistant-name {
+  flex-shrink: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.answer-document-tag {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 230px;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+  color: #6c7168;
+  font-size: 12px;
+}
+
+.answer-document-tag svg {
+  flex-shrink: 0;
+}
+.answer-document-tag span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.answer-search-summary {
+  margin: -5px 0 16px 33px;
+  color: #6c7168;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.answer-search-summary p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+}
+.answer-search-summary strong {
+  color: #2f4938;
+  font-weight: 600;
+}
+.answer-search-summary .answer-search-warning {
+  margin-top: 4px;
+  color: #994a3c;
+}
+.answer-body {
+  min-width: 0;
+  padding-left: 33px;
+}
+.answer-source-section {
+  min-width: 0;
+}
+.answer-source-section + .answer-source-section {
+  margin-top: 28px;
+}
+
+.answer-source-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  color: #6c7168;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.answer-markdown {
+  min-width: 0;
+  color: #252723;
+  font-size: 15px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.answer-markdown > :first-child {
+  margin-top: 0;
+}
+.answer-markdown > :last-child {
+  margin-bottom: 0;
+}
+.answer-markdown p {
+  margin: 0 0 14px;
+}
+.answer-markdown h1,
+.answer-markdown h2,
+.answer-markdown h3,
+.answer-markdown h4,
+.answer-markdown h5,
+.answer-markdown h6 {
+  margin: 20px 0 10px;
+  color: #252723;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.answer-markdown h1 {
+  font-size: 19px;
+}
+.answer-markdown h2 {
+  font-size: 17px;
+}
+.answer-markdown ul,
+.answer-markdown ol {
+  margin: 10px 0 15px;
+  padding-left: 22px;
+}
+.answer-markdown ul {
+  list-style-type: disc;
+}
+.answer-markdown ol {
+  list-style-type: decimal;
+}
+.answer-markdown li + li {
+  margin-top: 6px;
+}
+.answer-markdown li p {
+  margin-bottom: 5px;
+}
+.answer-markdown li::marker {
+  color: #6c7168;
+}
+.answer-markdown a {
+  color: #2f4938;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.answer-markdown a:hover {
+  color: #243f29;
+}
+.answer-markdown blockquote {
+  margin: 14px 0;
+  padding: 3px 0 3px 15px;
+  border-left: 2px solid #d5d9d0;
+  color: #6c7168;
+}
+.answer-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+.answer-markdown code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #f3f4f0;
+  color: #252723;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+.answer-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 14px 0;
+  padding: 15px 17px;
+  border-radius: 8px;
+  background: #f7f7f5;
+  line-height: 1.65;
+  white-space: pre;
+}
+.answer-markdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 13px;
+  overflow-wrap: normal;
+}
+.answer-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 14px 0;
+  border: 1px solid #e5e7e1;
+  border-radius: 6px;
+}
+.answer-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.answer-markdown th,
+.answer-markdown td {
+  min-width: 110px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7e1;
+  text-align: left;
+  vertical-align: top;
+}
+.answer-markdown th {
+  background: #f7f7f5;
+  color: #252723;
+  font-weight: 600;
+}
+.answer-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+.answer-markdown hr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid #e5e7e1;
+}
+.answer-markdown input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: #2f4938;
+}
+.answer-image-alt {
+  color: #6c7168;
+  font-style: italic;
+}
+.answer-markdown .answer-empty {
+  color: #6c7168;
+  font-size: 13px;
+}
+
+.answer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 16px 0 0 27px;
+}
+
+.answer-action,
+.answer-retry {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #6c7168;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.answer-action:hover,
+.answer-action[aria-pressed="true"] {
+  background: #f3f4f0;
+  color: #2f4938;
+}
+.answer-action-feedback {
+  color: #6c7168;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.answer-voice-label {
+  color: #2f4938;
+}
+.answer-voice-error {
+  color: #994a3c;
+}
+.answer-action:focus-visible,
+.answer-retry:focus-visible,
+.answer-markdown a:focus-visible,
+.answer-markdown pre:focus-visible,
+.answer-table-scroll:focus-visible {
+  outline: 2px solid #2f4938;
+  outline-offset: 3px;
+}
+
+.answer-waiting {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 1px 0 10px 33px;
+}
+.answer-waiting p {
+  margin: 0;
+  color: #6c7168;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.answer-waiting-dots {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 3px;
+}
+.answer-waiting-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 100%;
+  background: #6c7168;
+  animation: answer-pulse 1.4s ease-in-out infinite;
+}
+.answer-waiting-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.answer-waiting-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes answer-pulse {
+  0%,
+  70%,
+  100% {
+    opacity: 0.4;
+  }
+  35% {
+    opacity: 1;
+  }
+}
+
+.answer-notice {
+  margin-left: 33px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid #d5b3a8;
+  color: #6c7168;
+}
+.answer-notice p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.answer-notice .answer-notice-title {
+  margin-top: 0;
+  color: #994a3c;
+  font-weight: 600;
+}
+.answer-retry {
+  margin: 10px 0 0 -5px;
+  color: #2f4938;
+}
+.answer-retry:hover {
+  background: #f3f4f0;
+}
+.answer-retry:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.answer-notice-stopped {
+  border-color: #e5e7e1;
+}
+.answer-notice-stopped .answer-notice-title {
+  color: #252723;
+}
+
+@media (max-width: 600px) {
+  .answer-question {
+    max-width: 94%;
+    padding: 13px 15px;
+  }
+  .answer-assistant-heading {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .answer-document-tag {
+    max-width: 145px;
+    margin-left: 0;
+  }
+  .answer-search-summary {
+    margin-left: 0;
+  }
+  .answer-body {
+    padding-left: 0;
+  }
+  .answer-actions {
+    margin-left: -5px;
+  }
+  .answer-waiting {
+    padding-left: 0;
+  }
+  .answer-notice {
+    margin-left: 0;
+  }
+  .answer-action,
+  .answer-retry {
+    min-height: 44px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-waiting-dots i {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
+.answer-sources {
+  margin-top: 18px;
+}
+.answer-citations {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.answer-citations summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+.answer-citations summary:focus-visible,
+.answer-citations a:focus-visible {
+  outline: 2px solid #2f4938;
+  outline-offset: 3px;
+}
+.answer-citations ul {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+}
+.answer-citations li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 5px 0;
+  overflow-wrap: anywhere;
+}
+.answer-citations svg {
+  flex-shrink: 0;
+}
+.answer-citations a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
