@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 import pytest
 
@@ -51,6 +53,38 @@ async def test_search_uses_serpapi_and_rejects_unsafe_result_urls(monkeypatch):
     }
     assert seen[0].url.host == "serpapi.com"
     assert seen[0].url.params["q"] == "public facts"
+
+
+@pytest.mark.asyncio
+async def test_search_does_not_log_credential_bearing_urls(monkeypatch, caplog):
+    synthetic_key = "synthetic-serpapi-secret-not-for-logging"
+    monkeypatch.setenv("SERPAPI_KEY", synthetic_key)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"organic_results": []})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda **kwargs: client)
+    # A verbose host application must not re-enable the HTTP client's INFO
+    # request line, which includes api_key in the real SerpAPI request URL.
+    with caplog.at_level(logging.DEBUG):
+        result = await mcp_server.search_web("public facts")
+        logging.getLogger("httpcore.http11").debug(
+            "Request trace for api_key=%s", synthetic_key
+        )
+        logging.getLogger("httpx").warning("Safe upstream warning")
+        logging.getLogger("httpcore.http11").error("Safe transport error")
+
+    assert result == {"sources": []}
+    assert requests[0].url.params["api_key"] == synthetic_key
+    assert synthetic_key not in caplog.text
+    assert "api_key=" not in caplog.text
+    assert "HTTP Request:" not in caplog.text
+    assert "Safe upstream warning" in caplog.text
+    assert "Safe transport error" in caplog.text
+    assert mcp_server.mcp.settings.log_level == "WARNING"
 
 
 @pytest.mark.asyncio

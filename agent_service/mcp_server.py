@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from urllib.parse import urlparse
 
 import httpx
 from mcp.server.mcpserver import MCPServer
 
-mcp = MCPServer("Document AI Web Search")
+# HTTPX's INFO request logs include the complete URL. SerpAPI authenticates via
+# a query parameter, so keep HTTP client request/debug logs out of MCP stderr.
+# Warnings and errors remain available for operational diagnosis.
+mcp = MCPServer("Document AI Web Search", log_level="WARNING")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 @mcp.tool()
