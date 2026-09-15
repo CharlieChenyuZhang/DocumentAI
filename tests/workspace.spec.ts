@@ -274,6 +274,94 @@ async function mockBackend(
   };
 }
 
+test("read aloud requests clean answer text and recovers from a speech service error", async ({
+  page,
+}) => {
+  await mockBackend(page, {
+    onRun: (route, input) =>
+      fulfillRun(route, input, {
+        text: "## Summary\n\nCustomer interviews help you learn. [D1]\n\nPublic research agrees. [W1]",
+      }),
+  });
+  const requests: { text: string }[] = [];
+  await page.route("**/api/speech", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 429,
+      json: { error: "provider diagnostic must remain private" },
+    });
+  });
+  await page.goto("/");
+  await page.getByTestId("pdf-input").setInputFiles(pdf());
+  await ask(page, "Summarize this report");
+  const read = page.getByRole("button", {
+    name: "Read answer aloud",
+    exact: true,
+  });
+  await expect(read).toBeVisible();
+  expect(requests).toHaveLength(0);
+  await read.click();
+  await expect(page.getByText(/Read aloud is busy/i)).toBeVisible();
+  await expect(
+    page.getByText("provider diagnostic must remain private"),
+  ).toHaveCount(0);
+  await expect(read).toBeVisible();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].text).toContain("Customer interviews help you learn.");
+  expect(requests[0].text).toContain("Public research agrees.");
+  expect(requests[0].text).not.toMatch(
+    /\[D1\]|\[W1\]|##|Document sources|Web sources/,
+  );
+  await read.click();
+  await expect.poll(() => requests.length).toBe(2);
+});
+
+test("read aloud can be cancelled during loading and does not resume in another conversation", async ({
+  page,
+}) => {
+  await mockBackend(page);
+  const pending: Route[] = [];
+  await page.route("**/api/speech", (route) => {
+    pending.push(route);
+  });
+  await page.goto("/");
+  await page.getByTestId("pdf-input").setInputFiles(pdf());
+  await ask(page, "Summarize this report");
+  const read = page.getByRole("button", {
+    name: "Read answer aloud",
+    exact: true,
+  });
+  await read.click();
+  await expect.poll(() => pending.length).toBe(1);
+  await page
+    .getByRole("button", { name: "Stop reading answer", exact: true })
+    .click();
+  await expect(read).toBeVisible();
+  await read.click();
+  await expect.poll(() => pending.length).toBe(2);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Stop reading answer", exact: true }),
+  ).toHaveCount(0);
+  for (const route of pending)
+    await route
+      .fulfill({
+        status: 503,
+        json: {
+          error: "Read aloud is temporarily unavailable. Please try again.",
+        },
+      })
+      .catch(() => {});
+  await expect(
+    page.getByRole("heading", { name: "Ask your documents" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Read aloud is temporarily unavailable. Please try again."),
+  ).toHaveCount(0);
+});
+
 test("starts simply, hides development controls, and requires a selected PDF", async ({
   page,
 }, testInfo) => {

@@ -17,6 +17,8 @@ class Settings:
     openai_api_key: str = field(default="", repr=False)
     openai_model: str = "gpt-5.6-sol"
     transcription_model: str = "gpt-transcribe"
+    speech_model: str = "gpt-4o-mini-tts"
+    speech_voice: str = "marin"
     serpapi_key: str = field(default="", repr=False)
     pinecone_api_key: str = field(default="", repr=False)
     pinecone_index_host: str = ""
@@ -52,6 +54,9 @@ class Settings:
                 "OPENAI_TRANSCRIPTION_MODEL", "gpt-transcribe"
             ).strip()
             or "gpt-transcribe",
+            speech_model=values.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip()
+            or "gpt-4o-mini-tts",
+            speech_voice=values.get("OPENAI_TTS_VOICE", "marin").strip() or "marin",
             serpapi_key=values.get("SERPAPI_KEY", ""),
             pinecone_api_key=values.get("PINECONE_API_KEY", ""),
             pinecone_index_host=values.get("PINECONE_INDEX_HOST", ""),

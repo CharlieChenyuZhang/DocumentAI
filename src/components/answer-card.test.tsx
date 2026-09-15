@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AnswerCard, type AnswerTurn } from "./answer-card";
+import { readAloud } from "../lib/read-aloud";
 
 const completeTurn: AnswerTurn = {
   id: "turn-1",
@@ -11,7 +12,10 @@ const completeTurn: AnswerTurn = {
   documentName: "Research report.pdf",
 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  act(() => readAloud.stop());
+  vi.unstubAllGlobals();
+});
 
 describe("AnswerCard", () => {
   it("renders unified streamed answers with safe Markdown", () => {
@@ -123,36 +127,108 @@ describe("AnswerCard", () => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
-  it("toggles read aloud and releases speech handlers on unmount", () => {
-    class MockUtterance {
-      onend: (() => void) | null = null;
-      onerror: ((event: { error: string }) => void) | null = null;
-      constructor(public text: string) {}
+  it("uses OpenAI narration for the rendered answer and cancels when it changes", async () => {
+    class MockAudio {
+      pause = vi.fn();
+      removeAttribute = vi.fn();
+      load = vi.fn();
     }
-    const speak = vi.fn();
-    const cancel = vi.fn();
-    vi.stubGlobal("SpeechSynthesisUtterance", MockUtterance);
-    vi.stubGlobal("speechSynthesis", { speak, cancel });
-    const { unmount } = render(
+    vi.stubGlobal("Audio", MockAudio);
+    const fetchAudio = vi.fn().mockReturnValue(new Promise(() => {}));
+    vi.stubGlobal("fetch", fetchAudio);
+    const { rerender, unmount } = render(
+      <AnswerCard
+        turn={{
+          ...completeTurn,
+          answer: "**A finding** [D1][W1].",
+          citations: [documentSource],
+          webSources: [webSource],
+        }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(fetchAudio).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Read answer aloud" }));
+    expect(JSON.parse(fetchAudio.mock.calls[0][1].body)).toEqual({
+      text: "A finding.",
+    });
+    expect(screen.getByText("Preparing OpenAI AI voice…")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Stop reading answer" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const firstSignal = fetchAudio.mock.calls[0][1].signal as AbortSignal;
+    rerender(
+      <AnswerCard
+        turn={{ ...completeTurn, answer: "Updated answer." }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    expect(firstSignal.aborted).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Read answer aloud" }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Read answer aloud" }));
+    const secondSignal = fetchAudio.mock.calls[1][1].signal as AbortSignal;
+    unmount();
+    expect(secondSignal.aborted).toBe(true);
+  });
+
+  it("resets the first answer when another answer starts reading", () => {
+    class MockAudio {
+      pause = vi.fn();
+      removeAttribute = vi.fn();
+      load = vi.fn();
+    }
+    vi.stubGlobal("Audio", MockAudio);
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+    const first = render(
       <AnswerCard
         turn={completeTurn}
         onRetry={vi.fn()}
         retryDisabled={false}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Read answer aloud" }));
-    const firstUtterance = speak.mock.calls[0][0] as MockUtterance;
-    expect(firstUtterance.text).toContain("three findings");
+    const second = render(
+      <AnswerCard
+        turn={{ ...completeTurn, id: "turn-2", question: "Second question?" }}
+        onRetry={vi.fn()}
+        retryDisabled={false}
+      />,
+    );
+    fireEvent.click(
+      within(first.container).getByRole("button", {
+        name: "Read answer aloud",
+      }),
+    );
+    fireEvent.click(
+      within(second.container).getByRole("button", {
+        name: "Read answer aloud",
+      }),
+    );
     expect(
-      screen.getByRole("button", { name: "Stop reading answer" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    act(() => firstUtterance.onend?.());
-    fireEvent.click(screen.getByRole("button", { name: "Read answer aloud" }));
-    const secondUtterance = speak.mock.calls[1][0] as MockUtterance;
-    unmount();
-    expect(secondUtterance.onend).toBeNull();
-    expect(secondUtterance.onerror).toBeNull();
-    expect(cancel).toHaveBeenCalledTimes(3);
+      within(first.container).getByRole("button", {
+        name: "Read answer aloud",
+      }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      within(second.container).getByRole("button", {
+        name: "Stop reading answer",
+      }),
+    ).toBeVisible();
+    first.unmount();
+    expect(
+      within(second.container).getByRole("button", {
+        name: "Stop reading answer",
+      }),
+    ).toBeVisible();
+    fireEvent.click(
+      within(second.container).getByRole("button", {
+        name: "Stop reading answer",
+      }),
+    );
+    expect(readAloud.getSnapshot().phase).toBe("idle");
   });
 });
 

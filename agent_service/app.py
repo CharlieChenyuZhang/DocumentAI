@@ -13,7 +13,7 @@ import anyio
 from ag_ui.core import RunAgentInput
 from ag_ui_adk import add_adk_fastapi_endpoint
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.datastructures import Headers
 
 from .config import Settings
@@ -25,6 +25,7 @@ from .document_store import (
     StoreConfigurationError,
     StoreUnavailableError,
 )
+from .speech import MAX_SPEECH_REQUEST_BYTES, speak_request
 from .transcription import MAX_AUDIO_REQUEST_BYTES, transcribe_request
 
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9:_-]{1,128}$")
@@ -65,6 +66,7 @@ class ServiceBoundary:
         limit = {
             "/documents": MAX_FILE_BYTES + 1024 * 1024,
             "/transcriptions": MAX_AUDIO_REQUEST_BYTES,
+            "/speech": MAX_SPEECH_REQUEST_BYTES,
         }.get(scope["path"], 512 * 1024)
         length = headers.get("content-length")
         if length:
@@ -211,6 +213,17 @@ def create_app(
         return JSONResponse(
             {"text": await transcribe_request(request, settings)},
             headers={"Cache-Control": "private, no-store"},
+        )
+
+    @app.post("/speech")
+    async def speech(request: Request):
+        return Response(
+            await speak_request(request, settings),
+            media_type="audio/mpeg",
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @app.post("/documents", status_code=201)

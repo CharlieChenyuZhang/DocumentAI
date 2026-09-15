@@ -65,3 +65,22 @@ def test_transcription_model_uses_default_and_server_override(tmp_path, monkeypa
     assert config.Settings.from_env().transcription_model == "gpt-4o-mini-transcribe"
     monkeypatch.setenv("OPENAI_TRANSCRIPTION_MODEL", " ")
     assert config.Settings.from_env().transcription_model == "gpt-transcribe"
+
+
+def test_speech_settings_use_defaults_and_server_overrides(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.delenv("OPENAI_TTS_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_TTS_VOICE", raising=False)
+    settings = config.Settings.from_env()
+    assert settings.speech_model == "gpt-4o-mini-tts"
+    assert settings.speech_voice == "marin"
+    monkeypatch.setenv("OPENAI_TTS_MODEL", "test-tts-model")
+    monkeypatch.setenv("OPENAI_TTS_VOICE", "cedar")
+    settings = config.Settings.from_env()
+    assert settings.speech_model == "test-tts-model"
+    assert settings.speech_voice == "cedar"
+    monkeypatch.setenv("OPENAI_TTS_MODEL", " ")
+    monkeypatch.setenv("OPENAI_TTS_VOICE", " ")
+    settings = config.Settings.from_env()
+    assert settings.speech_model == "gpt-4o-mini-tts"
+    assert settings.speech_voice == "marin"

@@ -32,6 +32,8 @@ Edit `.env.local`:
 | `OPENAI_API_KEY`              | A valid OpenAI API key with access to the generation and embedding models.                  |
 | `OPENAI_MODEL`                | Defaults to `gpt-5.6-sol`; no silent model substitution.                                    |
 | `OPENAI_TRANSCRIPTION_MODEL`  | Voice input model, defaults to `gpt-transcribe`.                                            |
+| `OPENAI_TTS_MODEL`            | Read aloud model, defaults to `gpt-4o-mini-tts`.                                            |
+| `OPENAI_TTS_VOICE`            | Read aloud voice, defaults to `marin`.                                                      |
 | `OPENAI_EMBEDDING_MODEL`      | Defaults to `text-embedding-3-small`.                                                       |
 | `OPENAI_EMBEDDING_DIMENSIONS` | Defaults to `1536`, matching the Pinecone index.                                            |
 | `VECTOR_BACKEND`              | `local` for persistent SQLite cosine search; `pinecone` for the existing cloud integration. |
@@ -85,6 +87,7 @@ Every document read, retrieval, and deletion checks the server-owned SQLite cata
 - Persistent document library; PDFs do not need re-uploading after a refresh or before every question.
 - Streaming Markdown answers, source labels, explicit retrieval/search progress, copy, read aloud, editable voice dictation, retry, and Markdown export.
 - Voice input records up to two minutes with the browser microphone. Click stop to send the recording to OpenAI through authenticated `/api/transcriptions` and the private agent service. Review or edit the transcript before sending your question. Recordings are limited to 8 MiB, processed in memory, and not stored by Document AI. Editing the draft, changing conversations, or cancelling stops capture and discards late results.
+- Read aloud uses OpenAI speech synthesis with the `marin` voice and natural narration instructions. Clicking it sends the answer text through authenticated `/api/speech`; the OpenAI key stays in the private agent service. Long answers play in sentence-based segments, omitting source markers such as `[D1]` and `[W1]`. Only one answer plays at a time. Stop cancels playback and pending generation; changing conversations releases audio. Audio is held in memory, never saved by Document AI, and identified as an AI voice in the interface.
 - Optional web search uses an actual stdio MCP server backed by SerpAPI. The planner receives the user question and document count, not retrieved document contents. Search queries still leave the application when web search is enabled.
 - Enabling web search requests relevant public context, including for summaries that name a public topic. Generic requests such as “summarize these documents” can be skipped when no public query is available; the answer explains how to add a topic. Empty results and unavailable web services are reported explicitly while document answers continue.
 - Each answer preserves its own search mode and execution outcome across history reloads and exports. The UI labels retrieved document plus web evidence as “Hybrid search · Documents + web”, separates document and web source counts, and expands web sources by default. This label describes the two evidence sources, not sparse/dense vector ranking.
@@ -118,6 +121,7 @@ Tests cover PDF ingestion, persistent ownership, cross-user access rejection, se
 - [Google ADK custom agents](https://adk.dev/agents/custom-agents/) and [LiteLLM integration](https://adk.dev/agents/models/litellm/)
 - [Pinecone namespaces](https://sdk.pinecone.io/python/how-to/vectors/namespaces.html)
 - [GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+- [OpenAI text to speech](https://developers.openai.com/api/docs/guides/text-to-speech)
 - [Auth.js GitHub provider](https://authjs.dev/getting-started/providers/github)
 
 The layout draws on [ChatPDF](https://www.chatpdf.com/), [NotebookLM](https://blog.google/innovation-and-ai/models-and-research/google-labs/notebooklm-new-features-december-2024/), and [Claude Projects](https://www.anthropic.com/news/projects): direct upload and chat, secondary details on demand, readable typography, and restrained controls.

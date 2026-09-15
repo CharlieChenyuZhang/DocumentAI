@@ -13,6 +13,7 @@ import {
   FileText,
   Globe2,
   Leaf,
+  Play,
   RotateCcw,
   Square,
   Volume2,
@@ -21,6 +22,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./answer-card.css";
 import { phaseLabel, type Turn } from "../lib/workspace";
+import { readAloud, renderedSpeechText } from "../lib/read-aloud";
 
 export type AnswerTurn = Turn;
 
@@ -29,13 +31,6 @@ interface AnswerCardProps {
   onRetry: () => void;
   retryDisabled: boolean;
 }
-
-const subscribeToSpeechSupport = () => () => {};
-const getSpeechSupport = () =>
-  typeof window !== "undefined" &&
-  Boolean(window.speechSynthesis) &&
-  typeof window.SpeechSynthesisUtterance === "function";
-const getServerSpeechSupport = () => false;
 
 function SafeMarkdown({ children }: { children: string }) {
   return (
@@ -130,15 +125,14 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
   );
-  const canSpeak = useSyncExternalStore(
-    subscribeToSpeechSupport,
-    getSpeechSupport,
-    getServerSpeechSupport,
+  const speech = useSyncExternalStore(
+    readAloud.subscribe,
+    readAloud.getSnapshot,
+    readAloud.getServerSnapshot,
   );
-  const [isReading, setIsReading] = useState(false);
-  const [speechError, setSpeechError] = useState(false);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const ownSpeech = speech.owner === headingId ? speech : null;
+  const isReading = Boolean(ownSpeech && ownSpeech.phase !== "error");
+  const bodyRef = useRef<HTMLElement>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const answerText = turn.answer ?? "";
   const documentSources = (turn.citations ?? []).filter(
@@ -183,14 +177,12 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
   useEffect(() => {
     return () => {
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      if (utteranceRef.current) {
-        utteranceRef.current.onend = null;
-        utteranceRef.current.onerror = null;
-        utteranceRef.current = null;
-        window.speechSynthesis.cancel();
-      }
     };
   }, []);
+
+  useEffect(() => {
+    return () => readAloud.stop(headingId);
+  }, [headingId, turn.id, turn.status, answerText]);
 
   async function copyAnswer() {
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
@@ -204,41 +196,14 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
   }
 
   function toggleReading() {
-    setSpeechError(false);
-    if (utteranceRef.current) {
-      utteranceRef.current = null;
-      window.speechSynthesis.cancel();
-      setIsReading(false);
+    if (isReading) {
+      readAloud.stop(headingId);
       return;
     }
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(
-        bodyRef.current?.innerText || answerText,
-      );
-      utteranceRef.current = utterance;
-      utterance.onend = () => {
-        if (utteranceRef.current === utterance) {
-          utteranceRef.current = null;
-          setIsReading(false);
-        }
-      };
-      utterance.onerror = (event) => {
-        if (utteranceRef.current === utterance) {
-          utteranceRef.current = null;
-          setIsReading(false);
-          setSpeechError(
-            event.error !== "canceled" && event.error !== "interrupted",
-          );
-        }
-      };
-      setIsReading(true);
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      utteranceRef.current = null;
-      setIsReading(false);
-      setSpeechError(true);
-    }
+    readAloud.start(
+      headingId,
+      bodyRef.current ? renderedSpeechText(bodyRef.current) : answerText,
+    );
   }
 
   return (
@@ -316,8 +281,12 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
 
         {(turn.status === "complete" || Boolean(turn.answer)) && (
           <>
-            <div className="answer-body" ref={bodyRef}>
-              <section aria-label="Answer" className="answer-markdown">
+            <div className="answer-body">
+              <section
+                aria-label="Answer"
+                className="answer-markdown"
+                ref={bodyRef}
+              >
                 <SafeMarkdown>
                   {turn.answer || "No answer was returned."}
                 </SafeMarkdown>
@@ -388,32 +357,58 @@ export function AnswerCard({ turn, onRetry, retryDisabled }: AnswerCardProps) {
                   )}
                   {copyState === "copied" ? "Copied" : "Copy"}
                 </button>
-                {canSpeak && (
+                <button
+                  className="answer-action"
+                  type="button"
+                  onClick={toggleReading}
+                  aria-pressed={isReading}
+                  aria-label={
+                    isReading ? "Stop reading answer" : "Read answer aloud"
+                  }
+                  title="Read this answer with an AI-generated OpenAI voice"
+                >
+                  {isReading ? (
+                    <Square size={13} aria-hidden="true" />
+                  ) : (
+                    <Volume2 size={15} aria-hidden="true" />
+                  )}
+                  {isReading ? "Stop reading" : "Read aloud"}
+                </button>
+                {ownSpeech?.phase === "blocked" && (
                   <button
                     className="answer-action"
                     type="button"
-                    onClick={toggleReading}
-                    aria-pressed={isReading}
-                    aria-label={
-                      isReading ? "Stop reading answer" : "Read answer aloud"
-                    }
+                    onClick={() => readAloud.resume(headingId)}
                   >
-                    {isReading ? (
-                      <Square size={13} aria-hidden="true" />
-                    ) : (
-                      <Volume2 size={15} aria-hidden="true" />
-                    )}
-                    {isReading ? "Stop reading" : "Read aloud"}
+                    <Play size={14} aria-hidden="true" /> Play audio
                   </button>
+                )}
+                {isReading && (
+                  <span
+                    className="answer-action-feedback answer-voice-label"
+                    role="status"
+                  >
+                    {ownSpeech?.phase === "loading"
+                      ? "Preparing OpenAI AI voice…"
+                      : ownSpeech?.phase === "blocked"
+                        ? "OpenAI AI voice ready. Select Play audio to listen."
+                        : "OpenAI AI voice"}
+                  </span>
+                )}
+                {ownSpeech?.error && (
+                  <span
+                    className="answer-action-feedback answer-voice-error"
+                    role="alert"
+                  >
+                    {ownSpeech.error}
+                  </span>
                 )}
                 <span className="answer-action-feedback" role="status">
                   {copyState === "error"
                     ? "Couldn’t copy. Please select and copy the answer."
-                    : speechError
-                      ? "Read aloud is unavailable. Please try again."
-                      : copyState === "copied"
-                        ? "Answer copied to clipboard."
-                        : ""}
+                    : copyState === "copied"
+                      ? "Answer copied to clipboard."
+                      : ""}
                 </span>
               </div>
             )}

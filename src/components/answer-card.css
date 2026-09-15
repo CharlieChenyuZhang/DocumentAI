@@ -299,6 +299,12 @@
   font-size: 12px;
   line-height: 1.6;
 }
+.answer-voice-label {
+  color: #2f4938;
+}
+.answer-voice-error {
+  color: #994a3c;
+}
 .answer-action:focus-visible,
 .answer-retry:focus-visible,
 .answer-markdown a:focus-visible,
